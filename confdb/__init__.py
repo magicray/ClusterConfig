@@ -23,7 +23,6 @@ class Client():
     def __init__(self, cacert, cert, servers):
         self.client = RPCClient(cacert, cert, servers)
         self.quorum = self.client.quorum
-        self.servers = servers
 
     # PAXOS Proposer
     async def put(self, key, version, value):
@@ -38,19 +37,22 @@ class Client():
         # CRUX of the paxos protocol - Find the most recent accepted value
         accepted_seq = 0
         for v in res.values():
-            res = pickle.loads(v)
-            if res['accepted_seq'] > accepted_seq:
-                accepted_seq, value = res['accepted_seq'], res['value']
+            v = pickle.loads(v)
+            if v['accepted_seq'] > accepted_seq:
+                accepted_seq, value = v['accepted_seq'], v['value']
 
-        # Paxos ACCEPT phase - write the most suitable value found above
+        # Paxos ACCEPT phase - propose the value found above
         res = await self.client.filtered(f'/accept/{url}', value)
         if self.quorum > len(res):
             raise Exception('NO_ACCEPT_QUORUM')
 
+        if not all([1 == pickle.loads(v)['count'] for v in res.values()]):
+            raise Exception('ACCEPT_FAILED')
+
         return 'CONFLICT' if accepted_seq > 0 else 'OK'
 
     async def get(self, key):
-        for i in range(len(self.servers)):
+        for i in range(self.quorum):
             res = await self.client.filtered(f'/read/key/{key}')
             if self.quorum > len(res):
                 await asyncio.sleep(1)
@@ -58,8 +60,8 @@ class Client():
 
             vlist = [pickle.loads(v) for v in res.values()]
             if all([vlist[0] == v for v in vlist]):
-                return dict(version=vlist[0]['version'],
-                            value=vlist[0]['value'])
+                return dict(value=vlist[0]['value'],
+                            version=vlist[0]['version'])
 
             for v in vlist:
                 new = v['version'], v['accepted_seq']

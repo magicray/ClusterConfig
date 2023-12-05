@@ -37,7 +37,7 @@ async def paxos_promise(ctx, key, version, proposal_seq):
             ''', [key, version]).fetchone()
 
         if proposal_seq <= promised_seq:
-            raise Exception(f'INVALID_PROMISE_SEQ {proposal_seq}')
+            raise Exception(f'OLD_PROMISE_SEQ {key}:{version} {proposal_seq}')
 
         db.execute('update kv set promised_seq=? where key=? and version=?',
                    [proposal_seq, key, version])
@@ -65,12 +65,12 @@ async def paxos_accept(ctx, key, version, proposal_seq, octets):
             [key, version]).fetchone()[0]
 
         if proposal_seq < promised_seq:
-            raise Exception(f'INVALID_ACCEPT_SEQ {proposal_seq}')
+            raise Exception(f'OLD_ACCEPT_SEQ {key}:{version} {proposal_seq}')
 
+        db.execute('delete from kv where key=? and version<?', [key, version])
         db.execute('''update kv set promised_seq=?, accepted_seq=?, value=?
                       where key=? and version=?''',
                    [proposal_seq, proposal_seq, octets, key, version])
-        db.execute('delete from kv where key=? and version<?', [key, version])
         db.commit()
 
         count = db.execute('select count(*) from kv where key=? and version=?',
