@@ -1,5 +1,6 @@
 import time
 import pickle
+import asyncio
 import httprpc
 
 
@@ -52,19 +53,19 @@ class Client():
         for i in range(len(self.servers)):
             res = await self.client.filtered(f'/read/key/{key}')
             if self.quorum > len(res):
-                raise Exception('NO_QUORUM')
+                await asyncio.sleep(1)
+                continue
 
             vlist = [pickle.loads(v) for v in res.values()]
             if all([vlist[0] == v for v in vlist]):
                 return dict(version=vlist[0]['version'],
                             value=vlist[0]['value'])
 
-            max_v = vlist[0]
             for v in vlist:
                 new = v['version'], v['accepted_seq']
-                old = max_v['version'], max_v['accepted_seq']
+                old = vlist[0]['version'], vlist[0]['accepted_seq']
 
                 if new > old:
-                    max_v = v
+                    vlist[0] = v
 
-            await self.put(key, max_v['version'], max_v['value'])
+            await self.put(key, vlist[0]['version'], vlist[0]['value'])
