@@ -1,6 +1,5 @@
 import time
 import pickle
-import asyncio
 import httprpc
 
 
@@ -55,8 +54,7 @@ class Client():
         for i in range(self.quorum):
             res = await self.client.filtered(f'/read/key/{key}')
             if self.quorum > len(res):
-                await asyncio.sleep(1)
-                continue
+                raise Exception('NO_READ_QUORUM')
 
             vlist = [pickle.loads(v) for v in res.values()]
             if all([vlist[0] == v for v in vlist]):
