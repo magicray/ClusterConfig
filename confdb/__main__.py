@@ -15,10 +15,10 @@ async def put(G):
 
 if '__main__' == __name__:
     G = argparse.ArgumentParser()
+    G.add_argument('--key', help='key')
     G.add_argument('--cert', help='certificate path')
     G.add_argument('--cacert', help='ca certificate path')
     G.add_argument('--servers', help='comma separated list of server ip:port')
-    G.add_argument('--key', help='key')
     G.add_argument('--version', help='version')
     G = G.parse_args()
 
