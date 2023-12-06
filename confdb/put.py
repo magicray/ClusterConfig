@@ -1,23 +1,17 @@
 import sys
+import json
 import confdb
 import asyncio
-import logging
 import argparse
-from logging import critical as log
 
 
 async def main(G):
-    try:
-        client = confdb.Client(G.cacert, G.cert, G.servers)
-        log(await client.put(G.key, G.version, sys.stdin.buffer.read()))
-    except Exception as e:
-        log(e)
-        exit(1)
+    client = confdb.Client(G.cacert, G.cert, G.servers)
+    result = await client.put(G.key, G.version, sys.stdin.read().strip())
+    print(json.dumps(result, sort_keys=True, indent=4))
 
 
 if '__main__' == __name__:
-    logging.basicConfig(format='%(asctime)s %(process)d : %(message)s')
-
     G = argparse.ArgumentParser()
     G.add_argument('--cert', help='certificate path')
     G.add_argument('--cacert', help='ca certificate path')

@@ -1,4 +1,5 @@
 import time
+import json
 import pickle
 import httprpc
 
@@ -27,6 +28,7 @@ class Client():
     async def put(self, key, version, value):
         seq = int(time.strftime('%Y%m%d%H%M%S'))
         url = f'key/{key}/version/{version}/proposal_seq/{seq}'
+        value = json.dumps(value, sort_keys=True, indent=4).encode()
 
         # Paxos PROMISE phase - block stale writers
         res = await self.client.filtered(f'/promise/{url}')
@@ -48,7 +50,8 @@ class Client():
         if not all([1 == pickle.loads(v)['count'] for v in res.values()]):
             raise Exception('ACCEPT_FAILED')
 
-        return 'CONFLICT' if accepted_seq > 0 else 'OK'
+        return dict(key=key, version=version, value=json.loads(value.decode()),
+                    status='CONFLICT' if accepted_seq > 0 else 'OK')
 
     async def get(self, key):
         for i in range(self.quorum):
@@ -58,7 +61,7 @@ class Client():
 
             vlist = [pickle.loads(v) for v in res.values()]
             if all([vlist[0] == v for v in vlist]):
-                return dict(value=vlist[0]['value'],
+                return dict(value=json.loads(vlist[0]['value'].decode()),
                             version=vlist[0]['version'])
 
             for v in vlist:
@@ -68,4 +71,5 @@ class Client():
                 if new > old:
                     vlist[0] = v
 
-            await self.put(key, vlist[0]['version'], vlist[0]['value'])
+            await self.put(key, vlist[0]['version'],
+                           json.loads(vlist[0]['value'].decode()))
