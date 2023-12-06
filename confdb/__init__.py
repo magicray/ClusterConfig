@@ -61,8 +61,8 @@ class Client():
 
             vlist = [pickle.loads(v) for v in res.values()]
             if all([vlist[0] == v for v in vlist]):
-                return dict(value=json.loads(vlist[0]['value'].decode()),
-                            version=vlist[0]['version'])
+                return dict(key=key, version=vlist[0]['version'],
+                            value=json.loads(vlist[0]['value'].decode()))
 
             for v in vlist:
                 new = v['version'], v['accepted_seq']
