@@ -6,13 +6,11 @@ import argparse
 
 
 async def get(G):
-    result = await G.client.get(G.key)
-    print(json.dumps(result, sort_keys=True, indent=4))
+    return await G.client.get(G.key)
 
 
 async def put(G):
-    result = await G.client.put(G.key, G.version, sys.stdin.read().strip())
-    print(json.dumps(result, sort_keys=True, indent=4))
+    return await G.client.put(G.key, G.version, sys.stdin.read().strip())
 
 
 if '__main__' == __name__:
@@ -25,4 +23,5 @@ if '__main__' == __name__:
     G = G.parse_args()
 
     G.client = confdb.Client(G.cacert, G.cert, G.servers)
-    asyncio.run(put(G)) if G.version else asyncio.run(get(G))
+    result = asyncio.run(put(G)) if G.version else asyncio.run(get(G))
+    print(json.dumps(result, sort_keys=True, indent=4))
