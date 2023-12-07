@@ -28,7 +28,9 @@ class Client():
     async def put(self, key, version, value):
         seq = int(time.strftime('%Y%m%d%H%M%S'))
         url = f'key/{key}/version/{version}/proposal_seq/{seq}'
-        value = json.dumps(value, sort_keys=True, indent=4).encode()
+
+        if type(value) is not bytes:
+            value = json.dumps(value, sort_keys=True, indent=4).encode()
 
         # Paxos PROMISE phase - block stale writers
         res = await self.client.filtered(f'/promise/{url}')
@@ -64,12 +66,4 @@ class Client():
                 return dict(key=key, version=vlist[0]['version'],
                             value=json.loads(vlist[0]['value'].decode()))
 
-            for v in vlist:
-                new = v['version'], v['accepted_seq']
-                old = vlist[0]['version'], vlist[0]['accepted_seq']
-
-                if new > old:
-                    vlist[0] = v
-
-            await self.put(key, vlist[0]['version'],
-                           json.loads(vlist[0]['value'].decode()))
+            await self.put(key, max([v['version'] for v in vlist]), b'')

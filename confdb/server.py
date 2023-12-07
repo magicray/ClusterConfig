@@ -56,6 +56,9 @@ async def paxos_accept(ctx, key, version, proposal_seq, octets):
     version = int(version)
     proposal_seq = int(proposal_seq)
 
+    if not octets:
+        raise Exception('CANT_SET_NULL_OCTETS')
+
     db = sqlite3.connect(os.path.join('confdb', db))
     try:
         init_db(db, key, version)
