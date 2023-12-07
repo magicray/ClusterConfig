@@ -20,14 +20,13 @@ def init_db(db, key, version):
     db.execute('insert or ignore into kv values(?,?,0,0,null)', [key, version])
 
 
-# PROMISE - Block stale leaders and return the most recent accepted value.
+# PROMISE - Block stale writers and return the most recent accepted value.
 # Client will propose the most recent across servers in the accept phase
 async def paxos_promise(ctx, key, version, proposal_seq):
-    db = ctx['subject'] + '.sqlite3'
     version = int(version)
     proposal_seq = int(proposal_seq)
 
-    db = sqlite3.connect(os.path.join('confdb', db))
+    db = sqlite3.connect(os.path.join('confdb', ctx['subject'] + '.sqlite3'))
     try:
         init_db(db, key, version)
 
@@ -50,16 +49,14 @@ async def paxos_promise(ctx, key, version, proposal_seq):
 
 
 # ACCEPT - Client has sent the most recent value from the promise phase.
-# Stale leaders blocked. Only the most recent can reach this stage.
 async def paxos_accept(ctx, key, version, proposal_seq, octets):
-    db = ctx['subject'] + '.sqlite3'
     version = int(version)
     proposal_seq = int(proposal_seq)
 
     if not octets:
-        raise Exception('CANT_SET_NULL_OCTETS')
+        raise Exception('NULL_VALUE')
 
-    db = sqlite3.connect(os.path.join('confdb', db))
+    db = sqlite3.connect(os.path.join('confdb', ctx['subject'] + '.sqlite3'))
     try:
         init_db(db, key, version)
 
@@ -87,9 +84,7 @@ async def paxos_accept(ctx, key, version, proposal_seq, octets):
 
 # Return the row with the highest version for this key with accepted value
 async def read(ctx, key):
-    db = ctx['subject'] + '.sqlite3'
-
-    db = sqlite3.connect(os.path.join('confdb', db))
+    db = sqlite3.connect(os.path.join('confdb', ctx['subject'] + '.sqlite3'))
     try:
         version, accepted_seq, value = db.execute(
             '''select version, accepted_seq, value
