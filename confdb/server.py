@@ -108,5 +108,6 @@ if '__main__' == __name__:
     G = G.parse_args()
 
     os.makedirs('confdb', exist_ok=True)
-    httprpc.run(G.cacert, G.cert, G.port, dict(
-        read=read, promise=paxos_promise, accept=paxos_accept))
+    httprpc.run(G.port,
+                dict(read=read, promise=paxos_promise, accept=paxos_accept),
+                G.cert, G.cacert)
