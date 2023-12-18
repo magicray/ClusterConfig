@@ -1,5 +1,4 @@
 import os
-import pickle
 import sqlite3
 import logging
 import httprpc
@@ -25,6 +24,7 @@ async def paxos_promise(ctx, key, version, proposal_seq):
     version = int(version)
     proposal_seq = int(proposal_seq)
 
+    os.makedirs('confdb', exist_ok=True)
     db = sqlite3.connect(os.path.join('confdb', ctx['subject'] + '.sqlite3'))
     try:
         init_db(db, key, version)
@@ -41,7 +41,7 @@ async def paxos_promise(ctx, key, version, proposal_seq):
                    [proposal_seq, key, version])
         db.commit()
 
-        return pickle.dumps(dict(accepted_seq=accepted_seq, value=value))
+        return dict(accepted_seq=accepted_seq, value=value)
     finally:
         db.rollback()
         db.close()
@@ -55,6 +55,7 @@ async def paxos_accept(ctx, key, version, proposal_seq, octets):
     if not octets:
         raise Exception('NULL_VALUE')
 
+    os.makedirs('confdb', exist_ok=True)
     db = sqlite3.connect(os.path.join('confdb', ctx['subject'] + '.sqlite3'))
     try:
         init_db(db, key, version)
@@ -75,7 +76,7 @@ async def paxos_accept(ctx, key, version, proposal_seq, octets):
         count = db.execute('select count(*) from kv where key=? and version=?',
                            [key, version]).fetchone()[0]
 
-        return pickle.dumps(dict(count=count))
+        return dict(count=count)
     finally:
         db.rollback()
         db.close()
@@ -83,6 +84,7 @@ async def paxos_accept(ctx, key, version, proposal_seq, octets):
 
 # Return the row with the highest version for this key with accepted value
 async def read(ctx, key):
+    os.makedirs('confdb', exist_ok=True)
     db = sqlite3.connect(os.path.join('confdb', ctx['subject'] + '.sqlite3'))
     try:
         version, accepted_seq, value = db.execute(
@@ -91,8 +93,7 @@ async def read(ctx, key):
                order by version desc limit 1''',
             [key]).fetchone()
 
-        return pickle.dumps(dict(version=version, accepted_seq=accepted_seq,
-                                 value=value))
+        return dict(version=version, accepted_seq=accepted_seq, value=value)
     finally:
         db.rollback()
         db.close()
@@ -107,7 +108,6 @@ if '__main__' == __name__:
     G.add_argument('--cacert', help='ca certificate path')
     G = G.parse_args()
 
-    os.makedirs('confdb', exist_ok=True)
     httprpc.run(G.port,
                 dict(read=read, promise=paxos_promise, accept=paxos_accept),
                 G.cert, G.cacert)

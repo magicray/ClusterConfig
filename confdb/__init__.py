@@ -1,7 +1,7 @@
 import time
 import json
-import pickle
 import httprpc
+from logging import critical as log
 
 
 class RPCClient(httprpc.Client):
@@ -13,7 +13,9 @@ class RPCClient(httprpc.Client):
         result = dict()
 
         for s, r in zip(self.conns.keys(), res):
-            if r and type(r) is bytes:
+            if isinstance(r, Exception):
+                log(f'{s} {type(r)} {r}')
+            else:
                 result[s] = r
 
         return result
@@ -40,7 +42,6 @@ class Client():
         # CRUX of the paxos protocol - Find the most recent accepted value
         accepted_seq = 0
         for v in res.values():
-            v = pickle.loads(v)
             if v['accepted_seq'] > accepted_seq:
                 accepted_seq, value = v['accepted_seq'], v['value']
 
@@ -49,7 +50,7 @@ class Client():
         if self.quorum > len(res):
             raise Exception('NO_ACCEPT_QUORUM')
 
-        if not all([1 == pickle.loads(v)['count'] for v in res.values()]):
+        if not all([1 == v['count'] for v in res.values()]):
             raise Exception('ACCEPT_FAILED')
 
         return dict(key=key, version=version, value=json.loads(value.decode()),
@@ -61,7 +62,7 @@ class Client():
             if self.quorum > len(res):
                 raise Exception('NO_READ_QUORUM')
 
-            vlist = [pickle.loads(v) for v in res.values()]
+            vlist = [v for v in res.values()]
             if all([vlist[0] == v for v in vlist]):
                 return dict(key=key, version=vlist[0]['version'],
                             value=json.loads(vlist[0]['value'].decode()))
