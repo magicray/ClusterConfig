@@ -5,7 +5,10 @@ import httprpc
 import argparse
 
 
-def init_db(db, key, version):
+def get_db(db):
+    os.makedirs('confdb', exist_ok=True)
+
+    db = sqlite3.connect(os.path.join('confdb', db + '.sqlite3'))
     db.execute('''create table if not exists kv(
                       key          text,
                       version      int,
@@ -15,7 +18,7 @@ def init_db(db, key, version):
                       primary key(key, version)
                   )''')
 
-    db.execute('insert or ignore into kv values(?,?,0,0,null)', [key, version])
+    return db
 
 
 # PROMISE - Block stale writers and return the most recent accepted value.
@@ -24,10 +27,10 @@ async def paxos_promise(ctx, key, version, proposal_seq):
     version = int(version)
     proposal_seq = int(proposal_seq)
 
-    os.makedirs('confdb', exist_ok=True)
-    db = sqlite3.connect(os.path.join('confdb', ctx['subject'] + '.sqlite3'))
+    db = get_db(ctx['subject'])
     try:
-        init_db(db, key, version)
+        db.execute('insert or ignore into kv values(?,?,0,0,null)',
+                   [key, version])
 
         promised_seq, accepted_seq, value = db.execute(
             '''select promised_seq, accepted_seq, value
@@ -55,10 +58,10 @@ async def paxos_accept(ctx, key, version, proposal_seq, octets):
     if not octets:
         raise Exception('NULL_VALUE')
 
-    os.makedirs('confdb', exist_ok=True)
-    db = sqlite3.connect(os.path.join('confdb', ctx['subject'] + '.sqlite3'))
+    db = get_db(ctx['subject'])
     try:
-        init_db(db, key, version)
+        db.execute('insert or ignore into kv values(?,?,0,0,null)',
+                   [key, version])
 
         promised_seq = db.execute(
             'select promised_seq from kv where key=? and version=?',
@@ -84,16 +87,27 @@ async def paxos_accept(ctx, key, version, proposal_seq, octets):
 
 # Return the row with the highest version for this key with accepted value
 async def read(ctx, key):
-    os.makedirs('confdb', exist_ok=True)
-    db = sqlite3.connect(os.path.join('confdb', ctx['subject'] + '.sqlite3'))
+    db = get_db(ctx['subject'])
     try:
         version, accepted_seq, value = db.execute(
-            '''select version, accepted_seq, value
-               from kv where key=? and accepted_seq > 0
+            '''select version, accepted_seq, value from kv
+               where key=? and accepted_seq > 0
                order by version desc limit 1''',
             [key]).fetchone()
 
         return dict(version=version, accepted_seq=accepted_seq, value=value)
+    finally:
+        db.rollback()
+        db.close()
+
+
+# Return the keys with latest accepted version
+async def keys(ctx):
+    db = get_db(ctx['subject'])
+    try:
+        rows = db.execute('select key, version from kv where accepted_seq > 0')
+
+        return rows.fetchall()
     finally:
         db.rollback()
         db.close()
@@ -108,6 +122,6 @@ if '__main__' == __name__:
     G.add_argument('--cacert', help='ca certificate path')
     G = G.parse_args()
 
-    httprpc.run(G.port,
-                dict(read=read, promise=paxos_promise, accept=paxos_accept),
+    httprpc.run(G.port, dict(read=read, keys=keys,
+                             promise=paxos_promise, accept=paxos_accept),
                 G.cert, G.cacert)

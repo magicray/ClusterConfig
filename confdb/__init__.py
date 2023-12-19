@@ -68,3 +68,16 @@ class Client():
                             value=json.loads(vlist[0]['value'].decode()))
 
             await self.put(key, max([v['version'] for v in vlist]), b'')
+
+    async def keys(self):
+        for i in range(self.quorum):
+            res = await self.client.filtered('/keys')
+            if self.quorum > len(res):
+                raise Exception('NO_READ_QUORUM')
+
+            result = dict()
+            for values in res.values():
+                for key, version in values:
+                    result[key] = version
+
+            return result

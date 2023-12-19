@@ -13,6 +13,10 @@ async def put(G):
     return await G.client.put(G.key, G.version, sys.stdin.read().strip())
 
 
+async def keys(G):
+    return await G.client.keys()
+
+
 if '__main__' == __name__:
     G = argparse.ArgumentParser()
     G.add_argument('--key', help='key')
@@ -23,5 +27,11 @@ if '__main__' == __name__:
     G = G.parse_args()
 
     G.client = confdb.Client(G.cacert, G.cert, G.servers)
-    result = asyncio.run(put(G)) if G.version else asyncio.run(get(G))
+    if G.version:
+        result = asyncio.run(put(G))
+    elif G.key:
+        result = asyncio.run(get(G))
+    else:
+        result = asyncio.run(keys(G))
+
     print(json.dumps(result, sort_keys=True, indent=4))
