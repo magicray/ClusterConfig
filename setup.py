@@ -2,10 +2,10 @@ import time
 from distutils.core import setup
 
 setup(
-  name='ConfDB',
-  packages=['confdb'],
+  name='ClusterDB',
+  packages=['clusterdb'],
   version=time.strftime('%Y%m%d'),
-  description='Highly Available store for configuration variables - '
+  description='Highly Available key value store for atomic updates - '
               'Replicated and Strongly Consistent',
   long_description='Leaderless. '
                    'Paxos for synchronous and consistent replication. '
