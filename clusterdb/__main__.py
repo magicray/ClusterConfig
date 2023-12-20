@@ -1,25 +1,27 @@
 import sys
 import json
 import asyncio
+import httprpc
 import argparse
 import clusterdb
 
 
-async def get(G):
-    return await G.client.get(G.key)
+async def get(ctx, key):
+    return await G.client.get(key)
 
 
-async def put(G):
-    return await G.client.put(G.key, G.version, sys.stdin.read().strip())
+async def put(ctx, key, version, text):
+    return await G.client.put(key, version, text)
 
 
-async def keys(G):
+async def keys(ctx):
     return await G.client.keys()
 
 
 if '__main__' == __name__:
     G = argparse.ArgumentParser()
     G.add_argument('--key', help='key')
+    G.add_argument('--port', help='port number for the localhost proxy')
     G.add_argument('--cert', help='certificate path')
     G.add_argument('--cacert', help='ca certificate path')
     G.add_argument('--servers', help='comma separated list of server ip:port')
@@ -28,11 +30,14 @@ if '__main__' == __name__:
 
     G.client = clusterdb.Client(G.cacert, G.cert, G.servers)
 
-    if G.version:
-        result = asyncio.run(put(G))
+    if G.port:
+        httprpc.run(G.port, dict(get=get, put=put, keys=keys))
+    elif G.version:
+        result = asyncio.run(put(None, G.key, G.version,
+                                 sys.stdin.read().strip()))
     elif G.key:
-        result = asyncio.run(get(G))
+        result = asyncio.run(get(None, G.key))
     else:
-        result = asyncio.run(keys(G))
+        result = asyncio.run(keys(None))
 
     print(json.dumps(result, sort_keys=True, indent=4))
