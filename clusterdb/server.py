@@ -9,7 +9,7 @@ def get_db(db):
     os.makedirs('confdb', exist_ok=True)
 
     db = sqlite3.connect(os.path.join('confdb', db + '.sqlite3'))
-    db.execute('''create table if not exists kv(
+    db.execute('''create table if not exists paxos(
                       key          text,
                       version      int,
                       promised_seq int,
@@ -29,18 +29,18 @@ async def paxos_promise(ctx, key, version, proposal_seq):
 
     db = get_db(ctx['subject'])
     try:
-        db.execute('insert or ignore into kv values(?,?,0,0,null)',
+        db.execute('insert or ignore into paxos values(?,?,0,0,null)',
                    [key, version])
 
         promised_seq, accepted_seq, value = db.execute(
             '''select promised_seq, accepted_seq, value
-               from kv where key=? and version=?
+               from paxos where key=? and version=?
             ''', [key, version]).fetchone()
 
         if proposal_seq <= promised_seq:
             raise Exception(f'OLD_PROMISE_SEQ {key}:{version} {proposal_seq}')
 
-        db.execute('update kv set promised_seq=? where key=? and version=?',
+        db.execute('update paxos set promised_seq=? where key=? and version=?',
                    [proposal_seq, key, version])
         db.commit()
 
@@ -60,24 +60,26 @@ async def paxos_accept(ctx, key, version, proposal_seq, octets):
 
     db = get_db(ctx['subject'])
     try:
-        db.execute('insert or ignore into kv values(?,?,0,0,null)',
+        db.execute('insert or ignore into paxos values(?,?,0,0,null)',
                    [key, version])
 
         promised_seq = db.execute(
-            'select promised_seq from kv where key=? and version=?',
+            'select promised_seq from paxos where key=? and version=?',
             [key, version]).fetchone()[0]
 
         if proposal_seq < promised_seq:
             raise Exception(f'OLD_ACCEPT_SEQ {key}:{version} {proposal_seq}')
 
-        db.execute('delete from kv where key=? and version<?', [key, version])
-        db.execute('''update kv set promised_seq=?, accepted_seq=?, value=?
-                      where key=? and version=?''',
-                   [proposal_seq, proposal_seq, octets, key, version])
+        db.execute('delete from paxos where key=? and version<?',
+                   [key, version])
+        db.execute('''update paxos set promised_seq=?, accepted_seq=?, value=?
+                      where key=? and version=?
+                   ''', [proposal_seq, proposal_seq, octets, key, version])
         db.commit()
 
-        count = db.execute('select count(*) from kv where key=? and version=?',
-                           [key, version]).fetchone()[0]
+        count = db.execute('''select count(*) from paxos
+                              where key=? and version=?
+                           ''', [key, version]).fetchone()[0]
 
         return dict(count=count)
     finally:
@@ -90,10 +92,10 @@ async def read(ctx, key):
     db = get_db(ctx['subject'])
     try:
         version, accepted_seq, value = db.execute(
-            '''select version, accepted_seq, value from kv
+            '''select version, accepted_seq, value from paxos
                where key=? and accepted_seq > 0
-               order by version desc limit 1''',
-            [key]).fetchone()
+               order by version desc limit 1
+            ''', [key]).fetchone()
 
         return dict(version=version, accepted_seq=accepted_seq, value=value)
     finally:
@@ -105,7 +107,9 @@ async def read(ctx, key):
 async def keys(ctx):
     db = get_db(ctx['subject'])
     try:
-        rows = db.execute('select key, version from kv where accepted_seq > 0')
+        rows = db.execute('''select key, version from paxos
+                             where accepted_seq > 0
+                          ''')
 
         return rows.fetchall()
     finally:
