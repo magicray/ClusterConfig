@@ -1,8 +1,8 @@
 import sys
 import json
-import confdb
 import asyncio
 import argparse
+import clusterdb
 
 
 async def get(G):
@@ -26,7 +26,8 @@ if '__main__' == __name__:
     G.add_argument('--version', help='version')
     G = G.parse_args()
 
-    G.client = confdb.Client(G.cacert, G.cert, G.servers)
+    G.client = clusterdb.Client(G.cacert, G.cert, G.servers)
+
     if G.version:
         result = asyncio.run(put(G))
     elif G.key:

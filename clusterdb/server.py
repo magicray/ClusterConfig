@@ -6,9 +6,9 @@ import argparse
 
 
 def get_db(db):
-    os.makedirs('confdb', exist_ok=True)
+    os.makedirs('clusterdb', exist_ok=True)
 
-    db = sqlite3.connect(os.path.join('confdb', db + '.sqlite3'))
+    db = sqlite3.connect(os.path.join('clusterdb', db + '.sqlite3'))
     db.execute('''create table if not exists paxos(
                       key          text,
                       version      int,
