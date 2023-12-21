@@ -31,7 +31,7 @@ if '__main__' == __name__:
     G.client = clusterdb.Client(G.cacert, G.cert, G.servers)
 
     if G.port:
-        httprpc.run(G.port, dict(get=get, put=put, keys=keys))
+        httprpc.run(G.port, dict(get=get, put=put, keys=keys), ip='127.0.0.1')
     elif G.version:
         result = asyncio.run(put(None, G.key, G.version,
                                  sys.stdin.read().strip()))
