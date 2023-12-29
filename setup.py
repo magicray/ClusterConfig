@@ -3,7 +3,7 @@ from distutils.core import setup
 
 setup(
   name='ClusterConfig',
-  packages=['cluster_config'],
+  modules=['cluster_config'],
   version=time.strftime('%Y%m%d'),
   description='Highly Available key value store for atomic updates - '
               'Replicated and Strongly Consistent',

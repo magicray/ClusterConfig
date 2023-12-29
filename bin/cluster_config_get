@@ -3,5 +3,5 @@
 if [ $# -gt 2 ]; then
     curl -k https:/$1/get/db/$2/key/$3
 else
-    curl -k https:/$1/keys/db/$2
+    curl -k https:/$1/get/db/$2
 fi

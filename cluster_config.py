@@ -93,60 +93,8 @@ async def paxos_accept(ctx, db, key, version, proposal_seq, octets):
         db.close()
 
 
-# Return the row with the highest version for this key with accepted value
-async def read(ctx, db, key):
-    db = get_db(db)
-    try:
-        version, accepted_seq, value = db.execute(
-            '''select version, accepted_seq, value from paxos
-               where key=? and accepted_seq > 0
-               order by version desc limit 1
-            ''', [key]).fetchone()
-
-        return dict(version=version, accepted_seq=accepted_seq, value=value)
-    finally:
-        db.rollback()
-        db.close()
-
-
-# Return the keys with latest accepted version
-async def key_list(ctx, db):
-    db = get_db(db)
-    try:
-        rows = db.execute('''select key, version from paxos
-                             where accepted_seq > 0
-                          ''')
-
-        return rows.fetchall()
-    finally:
-        db.rollback()
-        db.close()
-
-
-# GET Client
-async def get(ctx, db, key):
-    for i in range(G.client.quorum):
-        res = await G.client.filtered(f'read/db/{db}/key/{key}')
-        if G.client.quorum > len(res):
-            raise Exception('NO_READ_QUORUM')
-
-        vlist = [v for v in res.values()]
-        if all([vlist[0] == v for v in vlist]):
-            return dict(key=key, version=vlist[0]['version'],
-                        value=json.loads(vlist[0]['value'].decode()))
-
-        await put(ctx, db, 0, key, max([v['version'] for v in vlist]), '')
-
-
-# PUT Client
-async def put(ctx, db, secret, key, version, obj):
-    if type(secret) is not int:
-        result = await get(ctx, db, '-')
-        key_hmac = hmac.new(secret.encode(), result['value']['salt'].encode(),
-                            digestmod=hashlib.sha256).hexdigest()
-        if key_hmac != result['value']['hmac']:
-            raise Exception('Authentication Failed')
-
+# PROPOSE - Drives the paxos protocol
+async def paxos_propose(db, key, version, obj):
     seq = int(time.strftime('%Y%m%d%H%M%S'))
     url = f'db/{db}/key/{key}/version/{version}/proposal_seq/{seq}'
 
@@ -172,22 +120,69 @@ async def put(ctx, db, secret, key, version, obj):
         raise Exception('ACCEPT_FAILED')
 
     return dict(key=key, version=version, value=json.loads(value.decode()),
-                status='CONFLICT' if accepted_seq > 0 else 'OK')
+                db=db, status='CONFLICT' if accepted_seq > 0 else 'OK')
 
 
-# LIST Client
-async def keys(ctx, db):
-    for i in range(G.client.quorum):
-        res = await G.client.filtered(f'key_list/db/{db}')
-        if G.client.quorum > len(res):
-            raise Exception('NO_READ_QUORUM')
+async def read(ctx, db, key=None):
+    db = get_db(db)
+    try:
+        if key is None:
+            rows = db.execute('''select key, version from paxos
+                                 where accepted_seq > 0
+                              ''')
 
-        result = dict()
-        for values in res.values():
-            for key, version in values:
-                result[key] = version
+            return rows.fetchall()
+        else:
+            version, accepted_seq, value = db.execute(
+                '''select version, accepted_seq, value from paxos
+                   where key=? and accepted_seq > 0
+                   order by version desc limit 1
+                ''', [key]).fetchone()
 
-        return result
+            return dict(version=version, accepted_seq=accepted_seq,
+                        value=value)
+    finally:
+        db.rollback()
+        db.close()
+
+
+async def get(ctx, db, key=None):
+    if key is None:
+        for i in range(G.client.quorum):
+            res = await G.client.filtered(f'read/db/{db}')
+            if G.client.quorum > len(res):
+                raise Exception('NO_READ_QUORUM')
+
+            result = dict()
+            for values in res.values():
+                for key, version in values:
+                    result[key] = version
+
+            return result
+    else:
+        for i in range(G.client.quorum):
+            res = await G.client.filtered(f'read/db/{db}/key/{key}')
+            if G.client.quorum > len(res):
+                raise Exception('NO_READ_QUORUM')
+
+            vlist = [v for v in res.values()]
+            if all([vlist[0] == v for v in vlist]):
+                return dict(db=db, key=key, version=vlist[0]['version'],
+                            value=json.loads(vlist[0]['value'].decode()))
+
+            await paxos_propose(db, key, max([v['version'] for v in vlist]),
+                                '')
+
+
+async def put(ctx, db, secret, key, version, obj):
+    if type(secret) is not int:
+        result = await get(ctx, db, '-')
+        key_hmac = hmac.new(secret.encode(), result['value']['salt'].encode(),
+                            digestmod=hashlib.sha256).hexdigest()
+        if key_hmac != result['value']['hmac']:
+            raise Exception('Authentication Failed')
+
+    return await paxos_propose(db, key, version, obj)
 
 
 # Initialize the db and generate api key
@@ -208,7 +203,7 @@ async def init(ctx, db, secret=None):
     key_hmac = hmac.new(secret.encode(), salt.encode(),
                         digestmod=hashlib.sha256).hexdigest()
 
-    res = await put(ctx, db, 0, '-', version, dict(salt=salt, hmac=key_hmac))
+    res = await paxos_propose(db, '-', version, dict(salt=salt, hmac=key_hmac))
     res.pop('value', None)
 
     if 'OK' == res['status']:
@@ -244,7 +239,6 @@ if '__main__' == __name__:
     G = G.parse_args()
 
     G.client = RPCClient(G.cert, G.cert, G.servers)
-    httprpc.run(G.port, dict(init=init, put=put, get=get,
-                             keys=keys, key_list=key_list, read=read,
+    httprpc.run(G.port, dict(init=init, put=put, get=get, read=read,
                              promise=paxos_promise, accept=paxos_accept),
                 cacert=G.cert, cert=G.cert)
