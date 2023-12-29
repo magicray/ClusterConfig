@@ -1,0 +1,4 @@
+#!/bin/bash
+
+curl -k https:/$1/put/db/$2/secret/$3/key/$4/version/$5 \
+     -H 'content-type: application/json' -d @-

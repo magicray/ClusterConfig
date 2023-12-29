@@ -20,11 +20,10 @@ async def keys(ctx):
 
 if '__main__' == __name__:
     G = argparse.ArgumentParser()
+    G.add_argument('--db', help='db')
     G.add_argument('--key', help='key')
-    G.add_argument('--port', help='port number for the localhost proxy')
-    G.add_argument('--cert', help='certificate path')
-    G.add_argument('--cacert', help='ca certificate path')
-    G.add_argument('--servers', help='comma separated list of server ip:port')
+    G.add_argument('--secret', help='api secret')
+    G.add_argument('--server', help='server ip:port')
     G.add_argument('--version', help='version')
     G = G.parse_args()
 
