@@ -1,4 +1,4 @@
-# ClusterDB
+# Cluster Config
 Highly Available store for configuration variables
  * Compare and Swap updates
  * Replicated and Strongly Consistent
