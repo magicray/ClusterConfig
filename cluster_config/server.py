@@ -135,7 +135,7 @@ async def get(ctx, db, key):
             return dict(key=key, version=vlist[0]['version'],
                         value=json.loads(vlist[0]['value'].decode()))
 
-        await put(ctx, db, key, max([v['version'] for v in vlist]), '')
+        await put(ctx, db, 0, key, max([v['version'] for v in vlist]), '')
 
 
 # PUT Client
