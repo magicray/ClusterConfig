@@ -11,7 +11,7 @@ import argparse
 from logging import critical as log
 
 
-def get_db(db):
+def connect_db(db):
     os.makedirs('cluster_config', exist_ok=True)
 
     db = sqlite3.connect(os.path.join('cluster_config', db + '.sqlite3'))
@@ -27,81 +27,71 @@ def get_db(db):
     return db
 
 
-# PROMISE - Block stale writers and return the most recent accepted value.
-# Client will propose the most recent across servers in the accept phase
-async def paxos_promise(ctx, db, key, version, proposal_seq):
+async def paxos_server(ctx, db, key, version, proposal_seq, octets=None):
     version = int(version)
     proposal_seq = int(proposal_seq)
 
-    db = get_db(db)
+    db = connect_db(db)
     try:
         db.execute('insert or ignore into paxos values(?,?,0,0,null)',
                    [key, version])
 
-        promised_seq, accepted_seq, value = db.execute(
-            '''select promised_seq, accepted_seq, value
-               from paxos where key=? and version=?
-            ''', [key, version]).fetchone()
+        if octets is None:
+            # Paxos PROMISE - Block stale writers and return the most recent
+            # accepted value. Client will propose the most recent across
+            # servers in the accept phase
+            promised_seq, accepted_seq, value = db.execute(
+                '''select promised_seq, accepted_seq, value
+                   from paxos where key=? and version=?
+                ''', [key, version]).fetchone()
 
-        if proposal_seq <= promised_seq:
-            raise Exception(f'OLD_PROMISE_SEQ {key}:{version} {proposal_seq}')
+            if proposal_seq <= promised_seq:
+                raise Exception(f'PROMISE_SEQ {key}:{version} {proposal_seq}')
 
-        db.execute('update paxos set promised_seq=? where key=? and version=?',
-                   [proposal_seq, key, version])
-        db.commit()
+            db.execute('''update paxos set promised_seq=?
+                          where key=? and version=?
+                       ''', [proposal_seq, key, version])
+            db.commit()
 
-        return dict(accepted_seq=accepted_seq, value=value)
-    finally:
-        db.rollback()
-        db.close()
+            return dict(accepted_seq=accepted_seq, value=value)
+        else:
+            # Paxos ACCEPT - Client has sent the most recent value from the
+            # promise phase.
+            promised_seq = db.execute(
+                'select promised_seq from paxos where key=? and version=?',
+                [key, version]).fetchone()[0]
 
+            if proposal_seq < promised_seq:
+                raise Exception(f'ACCEPT_SEQ {key}:{version} {proposal_seq}')
 
-# ACCEPT - Client has sent the most recent value from the promise phase.
-async def paxos_accept(ctx, db, key, version, proposal_seq, octets):
-    version = int(version)
-    proposal_seq = int(proposal_seq)
+            db.execute('delete from paxos where key=? and version<?',
+                       [key, version])
 
-    if not octets:
-        raise Exception('NULL_VALUE')
+            db.execute('''update paxos
+                          set promised_seq=?, accepted_seq=?, value=?
+                          where key=? and version=?
+                       ''', [proposal_seq, proposal_seq, octets, key, version])
+            db.commit()
 
-    db = get_db(db)
-    try:
-        db.execute('insert or ignore into paxos values(?,?,0,0,null)',
-                   [key, version])
+            count = db.execute('''select count(*) from paxos
+                                  where key=? and version=?
+                               ''', [key, version]).fetchone()[0]
 
-        promised_seq = db.execute(
-            'select promised_seq from paxos where key=? and version=?',
-            [key, version]).fetchone()[0]
-
-        if proposal_seq < promised_seq:
-            raise Exception(f'OLD_ACCEPT_SEQ {key}:{version} {proposal_seq}')
-
-        db.execute('delete from paxos where key=? and version<?',
-                   [key, version])
-        db.execute('''update paxos set promised_seq=?, accepted_seq=?, value=?
-                      where key=? and version=?
-                   ''', [proposal_seq, proposal_seq, octets, key, version])
-        db.commit()
-
-        count = db.execute('''select count(*) from paxos
-                              where key=? and version=?
-                           ''', [key, version]).fetchone()[0]
-
-        return dict(count=count)
+            return dict(count=count)
     finally:
         db.rollback()
         db.close()
 
 
 # PROPOSE - Drives the paxos protocol
-async def paxos_propose(db, key, version, obj):
+async def paxos_client(db, key, version, obj):
     seq = int(time.strftime('%Y%m%d%H%M%S'))
-    url = f'db/{db}/key/{key}/version/{version}/proposal_seq/{seq}'
+    url = f'paxos/db/{db}/key/{key}/version/{version}/proposal_seq/{seq}'
 
     value = json.dumps(obj).encode()
 
     # Paxos PROMISE phase - block stale writers
-    res = await G.client.filtered(f'/promise/{url}')
+    res = await G.client.filtered(url)
     if G.client.quorum > len(res):
         raise Exception('NO_PROMISE_QUORUM')
 
@@ -112,7 +102,7 @@ async def paxos_propose(db, key, version, obj):
             accepted_seq, value = v['accepted_seq'], v['value']
 
     # Paxos ACCEPT phase - propose the value found above
-    res = await G.client.filtered(f'/accept/{url}', value)
+    res = await G.client.filtered(url, value)
     if G.client.quorum > len(res):
         raise Exception('NO_ACCEPT_QUORUM')
 
@@ -123,15 +113,14 @@ async def paxos_propose(db, key, version, obj):
                 db=db, status='CONFLICT' if accepted_seq > 0 else 'OK')
 
 
-async def read(ctx, db, key=None):
-    db = get_db(db)
+async def fetch(ctx, db, key=None):
+    db = connect_db(db)
     try:
         if key is None:
-            rows = db.execute('''select key, version from paxos
+            return db.execute('''select key, version from paxos
                                  where accepted_seq > 0
-                              ''')
-
-            return rows.fetchall()
+                                 order by key, version
+                              ''').fetchall()
         else:
             version, accepted_seq, value = db.execute(
                 '''select version, accepted_seq, value from paxos
@@ -142,26 +131,24 @@ async def read(ctx, db, key=None):
             return dict(version=version, accepted_seq=accepted_seq,
                         value=value)
     finally:
-        db.rollback()
         db.close()
 
 
 async def get(ctx, db, key=None):
     if key is None:
-        for i in range(G.client.quorum):
-            res = await G.client.filtered(f'read/db/{db}')
-            if G.client.quorum > len(res):
-                raise Exception('NO_READ_QUORUM')
+        res = await G.client.filtered(f'fetch/db/{db}')
+        if G.client.quorum > len(res):
+            raise Exception('NO_READ_QUORUM')
 
-            result = dict()
-            for values in res.values():
-                for key, version in values:
-                    result[key] = version
+        result = dict()
+        for values in res.values():
+            for key, version in values:
+                result[key] = version
 
-            return result
+        return result
     else:
         for i in range(G.client.quorum):
-            res = await G.client.filtered(f'read/db/{db}/key/{key}')
+            res = await G.client.filtered(f'fetch/db/{db}/key/{key}')
             if G.client.quorum > len(res):
                 raise Exception('NO_READ_QUORUM')
 
@@ -170,8 +157,7 @@ async def get(ctx, db, key=None):
                 return dict(db=db, key=key, version=vlist[0]['version'],
                             value=json.loads(vlist[0]['value'].decode()))
 
-            await paxos_propose(db, key, max([v['version'] for v in vlist]),
-                                '')
+            await paxos_client(db, key, max([v['version'] for v in vlist]), '')
 
 
 async def put(ctx, db, secret, key, version, obj):
@@ -182,7 +168,7 @@ async def put(ctx, db, secret, key, version, obj):
         if key_hmac != result['value']['hmac']:
             raise Exception('Authentication Failed')
 
-    return await paxos_propose(db, key, version, obj)
+    return await paxos_client(db, key, version, obj)
 
 
 # Initialize the db and generate api key
@@ -203,7 +189,7 @@ async def init(ctx, db, secret=None):
     key_hmac = hmac.new(secret.encode(), salt.encode(),
                         digestmod=hashlib.sha256).hexdigest()
 
-    res = await paxos_propose(db, '-', version, dict(salt=salt, hmac=key_hmac))
+    res = await paxos_client(db, '-', version, dict(salt=salt, hmac=key_hmac))
     res.pop('value', None)
 
     if 'OK' == res['status']:
@@ -239,6 +225,6 @@ if '__main__' == __name__:
     G = G.parse_args()
 
     G.client = RPCClient(G.cert, G.cert, G.servers)
-    httprpc.run(G.port, dict(init=init, put=put, get=get, read=read,
-                             promise=paxos_promise, accept=paxos_accept),
+    httprpc.run(G.port, dict(init=init, get=get, put=put,
+                             fetch=fetch, paxos=paxos_server),
                 cacert=G.cert, cert=G.cert)
