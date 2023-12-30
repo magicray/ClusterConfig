@@ -40,10 +40,7 @@ async def fetch(ctx, db, key=None):
                                 where key=? and accepted_seq > 0
                                 order by version desc limit 1
                              ''', [key]).fetchone()
-
-            version, accepted_seq, value = row if row else (0, 0, None)
-            return dict(version=version, accepted_seq=accepted_seq,
-                        value=value)
+            return row if row else [0, 0, None]
     finally:
         db.close()
 
@@ -166,14 +163,14 @@ async def get(ctx, db, key=None):
 
             vlist = [v for v in res.values()]
             if all([vlist[0] == v for v in vlist]):
-                result = dict(db=db, key=key, version=vlist[0]['version'])
+                result = dict(db=db, key=key, version=vlist[0][0])
 
-                if vlist[0]['version'] > 0:
-                    result['value'] = json.loads(vlist[0]['value'].decode())
+                if vlist[0][0] > 0:
+                    result['value'] = json.loads(vlist[0][2].decode())
 
                 return result
 
-            await paxos_client(db, key, max([v['version'] for v in vlist]), '')
+            await paxos_client(db, key, max([v[0] for v in vlist]), '')
 
 
 def get_hmac(secret, salt):
