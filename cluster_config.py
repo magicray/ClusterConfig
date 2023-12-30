@@ -27,14 +27,45 @@ def connect_db(db):
     return db
 
 
+async def fetch(ctx, db, key=None):
+    db = connect_db(db)
+    try:
+        if key is None:
+            return db.execute('''select key, version from paxos
+                                 where accepted_seq > 0
+                                 order by key, version
+                              ''').fetchall()
+        else:
+            row = db.execute('''select version, accepted_seq, value from paxos
+                                where key=? and accepted_seq > 0
+                                order by version desc limit 1
+                             ''', [key]).fetchone()
+
+            version, accepted_seq, value = row if row else (0, 0, None)
+            return dict(version=version, accepted_seq=accepted_seq,
+                        value=value)
+    finally:
+        db.close()
+
+
 async def paxos_server(ctx, db, key, version, proposal_seq, octets=None):
     version = int(version)
     proposal_seq = int(proposal_seq)
+
+    if version < 1:
+        raise Exception(f'INVALID_VERSION - {version}')
 
     db = connect_db(db)
     try:
         db.execute('insert or ignore into paxos values(?,?,0,0,null)',
                    [key, version])
+
+        current_version = db.execute('''select max(version) from paxos
+                                        where key=? and accepted_seq > 0
+                                     ''', [key]).fetchone()[0]
+
+        if current_version is not None and version < current_version:
+            raise Exception(f'STALE_VERSION - {version}')
 
         if octets is None:
             # Paxos PROMISE - Block stale writers and return the most recent
@@ -84,15 +115,15 @@ async def paxos_server(ctx, db, key, version, proposal_seq, octets=None):
 
 
 # PROPOSE - Drives the paxos protocol
-async def paxos_client(db, key, version, obj):
+async def paxos_client(client, db, key, version, obj):
     seq = int(time.strftime('%Y%m%d%H%M%S'))
     url = f'paxos/db/{db}/key/{key}/version/{version}/proposal_seq/{seq}'
 
     value = json.dumps(obj).encode()
 
     # Paxos PROMISE phase - block stale writers
-    res = await G.client.filtered(url)
-    if G.client.quorum > len(res):
+    res = await client.filtered(url)
+    if client.quorum > len(res):
         raise Exception('NO_PROMISE_QUORUM')
 
     # CRUX of the paxos protocol - Find the most recent accepted value
@@ -102,8 +133,8 @@ async def paxos_client(db, key, version, obj):
             accepted_seq, value = v['accepted_seq'], v['value']
 
     # Paxos ACCEPT phase - propose the value found above
-    res = await G.client.filtered(url, value)
-    if G.client.quorum > len(res):
+    res = await client.filtered(url, value)
+    if client.quorum > len(res):
         raise Exception('NO_ACCEPT_QUORUM')
 
     if not all([1 == v['count'] for v in res.values()]):
@@ -113,31 +144,12 @@ async def paxos_client(db, key, version, obj):
                 db=db, status='CONFLICT' if accepted_seq > 0 else 'OK')
 
 
-async def fetch(ctx, db, key=None):
-    db = connect_db(db)
-    try:
-        if key is None:
-            return db.execute('''select key, version from paxos
-                                 where accepted_seq > 0
-                                 order by key, version
-                              ''').fetchall()
-        else:
-            version, accepted_seq, value = db.execute(
-                '''select version, accepted_seq, value from paxos
-                   where key=? and accepted_seq > 0
-                   order by version desc limit 1
-                ''', [key]).fetchone()
-
-            return dict(version=version, accepted_seq=accepted_seq,
-                        value=value)
-    finally:
-        db.close()
-
-
 async def get(ctx, db, key=None):
+    client = ctx.get('client', RPCClient(G.cert, G.cert, G.servers))
+
     if key is None:
-        res = await G.client.filtered(f'fetch/db/{db}')
-        if G.client.quorum > len(res):
+        res = await client.filtered(f'fetch/db/{db}')
+        if client.quorum > len(res):
             raise Exception('NO_READ_QUORUM')
 
         result = dict()
@@ -147,36 +159,44 @@ async def get(ctx, db, key=None):
 
         return result
     else:
-        for i in range(G.client.quorum):
-            res = await G.client.filtered(f'fetch/db/{db}/key/{key}')
-            if G.client.quorum > len(res):
+        for i in range(client.quorum):
+            res = await client.filtered(f'fetch/db/{db}/key/{key}')
+            if client.quorum > len(res):
                 raise Exception('NO_READ_QUORUM')
 
             vlist = [v for v in res.values()]
             if all([vlist[0] == v for v in vlist]):
-                return dict(db=db, key=key, version=vlist[0]['version'],
-                            value=json.loads(vlist[0]['value'].decode()))
+                result = dict(db=db, key=key, version=vlist[0]['version'])
+
+                if vlist[0]['version'] > 0:
+                    result['value'] = json.loads(vlist[0]['value'].decode())
+
+                return result
 
             await paxos_client(db, key, max([v['version'] for v in vlist]), '')
 
 
 async def put(ctx, db, secret, key, version, obj):
-    if type(secret) is not int:
-        result = await get(ctx, db, '-')
-        key_hmac = hmac.new(secret.encode(), result['value']['salt'].encode(),
-                            digestmod=hashlib.sha256).hexdigest()
-        if key_hmac != result['value']['hmac']:
-            raise Exception('Authentication Failed')
+    client = RPCClient(G.cert, G.cert, G.servers)
+    ctx['client'] = client
 
-    return await paxos_client(db, key, version, obj)
+    result = await get(ctx, db, '#')
+    key_hmac = hmac.new(secret.encode(), result['value']['salt'].encode(),
+                        digestmod=hashlib.sha256).hexdigest()
+    if key_hmac != result['value']['hmac']:
+        raise Exception('Authentication Failed')
+
+    return await paxos_client(client, db, key, version, obj)
 
 
 # Initialize the db and generate api key
 async def init(ctx, db, secret=None):
-    version = 1
+    client = RPCClient(G.cert, G.cert, G.servers)
+    ctx['client'] = client
 
+    version = 1
     if secret is not None:
-        result = await get(ctx, db, '-')
+        result = await get(ctx, db, '#')
         key_hmac = hmac.new(secret.encode(), result['value']['salt'].encode(),
                             digestmod=hashlib.sha256).hexdigest()
         if key_hmac != result['value']['hmac']:
@@ -189,8 +209,8 @@ async def init(ctx, db, secret=None):
     key_hmac = hmac.new(secret.encode(), salt.encode(),
                         digestmod=hashlib.sha256).hexdigest()
 
-    res = await paxos_client(db, '-', version, dict(salt=salt, hmac=key_hmac))
-    res.pop('value', None)
+    res = await paxos_client(client, db, '#', version,
+                             dict(salt=salt, hmac=key_hmac))
 
     if 'OK' == res['status']:
         res['secret'] = secret
@@ -224,7 +244,6 @@ if '__main__' == __name__:
     G.add_argument('--servers', help='comma separated list of server ip:port')
     G = G.parse_args()
 
-    G.client = RPCClient(G.cert, G.cert, G.servers)
     httprpc.run(G.port, dict(init=init, get=get, put=put,
                              fetch=fetch, paxos=paxos_server),
                 cacert=G.cert, cert=G.cert)
