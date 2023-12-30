@@ -176,42 +176,37 @@ async def get(ctx, db, key=None):
             await paxos_client(db, key, max([v['version'] for v in vlist]), '')
 
 
+def get_hmac(secret, salt):
+    return hmac.new(secret.encode(), salt.encode(), hashlib.sha256).hexdigest()
+
+
 async def put(ctx, db, secret, key, version, obj):
-    client = RPCClient(G.cert, G.cert, G.servers)
-    ctx['client'] = client
+    ctx['client'] = RPCClient(G.cert, G.cert, G.servers)
 
     result = await get(ctx, db, '#')
-    key_hmac = hmac.new(secret.encode(), result['value']['salt'].encode(),
-                        digestmod=hashlib.sha256).hexdigest()
-    if key_hmac != result['value']['hmac']:
+    if result['value']['hmac'] != get_hmac(secret, result['value']['salt']):
         raise Exception('Authentication Failed')
 
-    return await paxos_client(client, db, key, version, obj)
+    return await paxos_client(ctx['client'], db, key, version, obj)
 
 
 # Initialize the db and generate api key
 async def init(ctx, db, secret=None):
-    client = RPCClient(G.cert, G.cert, G.servers)
-    ctx['client'] = client
+    ctx['client'] = RPCClient(G.cert, G.cert, G.servers)
 
     version = 1
     if secret is not None:
-        result = await get(ctx, db, '#')
-        key_hmac = hmac.new(secret.encode(), result['value']['salt'].encode(),
-                            digestmod=hashlib.sha256).hexdigest()
-        if key_hmac != result['value']['hmac']:
+        res = await get(ctx, db, '#')
+        if res['value']['hmac'] != get_hmac(secret, res['value']['salt']):
             raise Exception('Authentication Failed')
 
-        version = result['version'] + 1
+        version = res['version'] + 1
 
     salt = str(uuid.uuid4())
     secret = str(uuid.uuid4())
-    key_hmac = hmac.new(secret.encode(), salt.encode(),
-                        digestmod=hashlib.sha256).hexdigest()
 
-    res = await paxos_client(client, db, '#', version,
-                             dict(salt=salt, hmac=key_hmac))
-
+    res = await paxos_client(ctx['client'], db, '#', version,
+                             dict(salt=salt, hmac=get_hmac(secret, salt)))
     if 'OK' == res['status']:
         res['secret'] = secret
 
