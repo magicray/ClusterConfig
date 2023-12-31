@@ -113,9 +113,12 @@ async def paxos_server(ctx, db, key, version, proposal_seq, octets=None):
 
 
 # PROPOSE - Drives the paxos protocol
-async def paxos_client(client, db, key, version, value=None):
+async def paxos_client(client, db, key, version, obj=None):
     seq = int(time.strftime('%Y%m%d%H%M%S'))
     url = f'db/{db}/key/{key}/version/{version}/proposal_seq/{seq}'
+
+    if obj is not None:
+        value = gzip.compress(json.dumps(obj).encode())
 
     # Paxos PROMISE phase - block stale writers
     res = await client.filtered(f'promise/{url}')
@@ -184,8 +187,7 @@ async def put(ctx, db, secret, key, version, obj):
     if result['value']['hmac'] != get_hmac(secret, result['value']['salt']):
         raise Exception('Authentication Failed')
 
-    value = gzip.compress(json.dumps(obj, sort_keys=True, indent=4).encode())
-    return await paxos_client(ctx['client'], db, key, version, value)
+    return await paxos_client(ctx['client'], db, key, version, obj)
 
 
 # Initialize the db and generate api key
@@ -203,10 +205,8 @@ async def init(ctx, db, secret=None):
     salt = str(uuid.uuid4())
     secret = str(uuid.uuid4())
 
-    obj = dict(salt=salt, hmac=get_hmac(secret, salt))
-    value = gzip.compress(json.dumps(obj, sort_keys=True, indent=4).encode())
-
-    res = await paxos_client(ctx['client'], db, '#', version, value)
+    res = await paxos_client(ctx['client'], db, '#', version,
+                             dict(salt=salt, hmac=get_hmac(secret, salt)))
     if 'OK' == res['status']:
         res['secret'] = secret
 
