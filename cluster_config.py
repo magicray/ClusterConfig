@@ -1,4 +1,5 @@
 import os
+import gzip
 import time
 import json
 import uuid
@@ -112,11 +113,9 @@ async def paxos_server(ctx, db, key, version, proposal_seq, octets=None):
 
 
 # PROPOSE - Drives the paxos protocol
-async def paxos_client(client, db, key, version, obj):
+async def paxos_client(client, db, key, version, value=None):
     seq = int(time.strftime('%Y%m%d%H%M%S'))
     url = f'paxos/db/{db}/key/{key}/version/{version}/proposal_seq/{seq}'
-
-    value = json.dumps(obj).encode()
 
     # Paxos PROMISE phase - block stale writers
     res = await client.filtered(url)
@@ -137,8 +136,8 @@ async def paxos_client(client, db, key, version, obj):
     if not all([1 == v['count'] for v in res.values()]):
         raise Exception('ACCEPT_FAILED')
 
-    return dict(key=key, version=version, value=json.loads(value.decode()),
-                db=db, status='CONFLICT' if accepted_seq > 0 else 'OK')
+    return dict(db=db, key=key, version=version,
+                status='CONFLICT' if accepted_seq > 0 else 'OK')
 
 
 async def get(ctx, db, key=None):
@@ -166,11 +165,12 @@ async def get(ctx, db, key=None):
                 result = dict(db=db, key=key, version=vlist[0][0])
 
                 if vlist[0][0] > 0:
-                    result['value'] = json.loads(vlist[0][2].decode())
+                    value = gzip.decompress(vlist[0][2])
+                    result['value'] = json.loads(value.decode())
 
                 return result
 
-            await paxos_client(db, key, max([v[0] for v in vlist]), '')
+            await paxos_client(db, key, max([v[0] for v in vlist]))
 
 
 def get_hmac(secret, salt):
@@ -184,7 +184,8 @@ async def put(ctx, db, secret, key, version, obj):
     if result['value']['hmac'] != get_hmac(secret, result['value']['salt']):
         raise Exception('Authentication Failed')
 
-    return await paxos_client(ctx['client'], db, key, version, obj)
+    value = gzip.compress(json.dumps(obj, sort_keys=True, indent=4).encode())
+    return await paxos_client(ctx['client'], db, key, version, value)
 
 
 # Initialize the db and generate api key
@@ -202,8 +203,10 @@ async def init(ctx, db, secret=None):
     salt = str(uuid.uuid4())
     secret = str(uuid.uuid4())
 
-    res = await paxos_client(ctx['client'], db, '#', version,
-                             dict(salt=salt, hmac=get_hmac(secret, salt)))
+    obj = dict(salt=salt, hmac=get_hmac(secret, salt))
+    value = gzip.compress(json.dumps(obj, sort_keys=True, indent=4).encode())
+
+    res = await paxos_client(ctx['client'], db, '#', version, value)
     if 'OK' == res['status']:
         res['secret'] = secret
 
@@ -231,8 +234,8 @@ if '__main__' == __name__:
     logging.basicConfig(format='%(asctime)s %(process)d : %(message)s')
 
     G = argparse.ArgumentParser()
-    G.add_argument('--port', help='port number for server')
     G.add_argument('--cert', help='certificate path')
+    G.add_argument('--port', help='port number for server')
     G.add_argument('--servers', help='comma separated list of server ip:port')
     G = G.parse_args()
 
