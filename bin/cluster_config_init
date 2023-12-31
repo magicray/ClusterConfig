@@ -1,7 +1,7 @@
 #!/bin/bash
 
 if [ $# -gt 2 ]; then
-    curl -k https:/$1/init/db/$2/secret/$3
+    curl -k --compressed https:/$1/init/db/$2/secret/$3
 else
-    curl -k https:/$1/init/db/$2
+    curl -k --compressed https:/$1/init/db/$2
 fi
