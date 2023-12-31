@@ -24,7 +24,6 @@ def connect_db(db):
                       value        blob,
                       primary key(key, version)
                   )''')
-
     return db
 
 
@@ -55,15 +54,15 @@ async def paxos_server(ctx, db, key, version, proposal_seq, octets=None):
 
     db = connect_db(db)
     try:
-        db.execute('insert or ignore into paxos values(?,?,0,0,null)',
-                   [key, version])
-
         current_version = db.execute('''select max(version) from paxos
                                         where key=? and accepted_seq > 0
                                      ''', [key]).fetchone()[0]
 
         if current_version is not None and version < current_version:
             raise Exception(f'STALE_VERSION - {version}')
+
+        db.execute('insert or ignore into paxos values(?,?,0,0,null)',
+                   [key, version])
 
         if octets is None:
             # Paxos PROMISE - Block stale writers and return the most recent
@@ -102,22 +101,21 @@ async def paxos_server(ctx, db, key, version, proposal_seq, octets=None):
                        ''', [proposal_seq, proposal_seq, octets, key, version])
             db.commit()
 
-            count = db.execute('''select count(*) from paxos
-                                  where key=? and version=?
-                               ''', [key, version]).fetchone()[0]
-
-            return dict(count=count)
+            return dict(count=db.execute(
+              'select count(*) from paxos where key=? and version=?',
+              [key, version]).fetchone()[0])
     finally:
         db.rollback()
         db.close()
 
 
 # PROPOSE - Drives the paxos protocol
-async def paxos_client(client, db, key, version, obj=None):
+async def paxos_client(client, db, key, version, obj=b''):
     seq = int(time.strftime('%Y%m%d%H%M%S'))
     url = f'db/{db}/key/{key}/version/{version}/proposal_seq/{seq}'
 
-    if obj is not None:
+    if obj != b'':
+        # value to be set should always be json serializable
         value = gzip.compress(json.dumps(obj).encode())
 
     # Paxos PROMISE phase - block stale writers
@@ -136,6 +134,7 @@ async def paxos_client(client, db, key, version, obj=None):
     if client.quorum > len(res):
         raise Exception('NO_ACCEPT_QUORUM')
 
+    # Validate that a row with this version was successfully created in the db
     if not all([1 == v['count'] for v in res.values()]):
         raise Exception('ACCEPT_FAILED')
 
@@ -154,7 +153,8 @@ async def get(ctx, db, key=None):
         result = dict()
         for values in res.values():
             for key, version in values:
-                result[key] = version
+                if version > result.get(key, 0):
+                    result[key] = version
 
         return result
     else:
