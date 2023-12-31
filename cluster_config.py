@@ -115,10 +115,10 @@ async def paxos_server(ctx, db, key, version, proposal_seq, octets=None):
 # PROPOSE - Drives the paxos protocol
 async def paxos_client(client, db, key, version, value=None):
     seq = int(time.strftime('%Y%m%d%H%M%S'))
-    url = f'paxos/db/{db}/key/{key}/version/{version}/proposal_seq/{seq}'
+    url = f'db/{db}/key/{key}/version/{version}/proposal_seq/{seq}'
 
     # Paxos PROMISE phase - block stale writers
-    res = await client.filtered(url)
+    res = await client.filtered(f'promise/{url}')
     if client.quorum > len(res):
         raise Exception('NO_PROMISE_QUORUM')
 
@@ -129,7 +129,7 @@ async def paxos_client(client, db, key, version, value=None):
             accepted_seq, value = v['accepted_seq'], v['value']
 
     # Paxos ACCEPT phase - propose the value found above
-    res = await client.filtered(url, value)
+    res = await client.filtered(f'accept/{url}', value)
     if client.quorum > len(res):
         raise Exception('NO_ACCEPT_QUORUM')
 
@@ -170,7 +170,7 @@ async def get(ctx, db, key=None):
 
                 return result
 
-            await paxos_client(db, key, max([v[0] for v in vlist]))
+            await paxos_client(client, db, key, max([v[0] for v in vlist]))
 
 
 def get_hmac(secret, salt):
@@ -239,6 +239,6 @@ if '__main__' == __name__:
     G.add_argument('--servers', help='comma separated list of server ip:port')
     G = G.parse_args()
 
-    httprpc.run(G.port, dict(init=init, get=get, put=put,
-                             fetch=fetch, paxos=paxos_server),
+    httprpc.run(G.port, dict(init=init, get=get, put=put, fetch=fetch,
+                             promise=paxos_server, accept=paxos_server),
                 cacert=G.cert, cert=G.cert)
