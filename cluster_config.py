@@ -110,7 +110,7 @@ async def paxos_server(ctx, db, key, version, proposal_seq, octets=None):
 
 
 # PROPOSE - Drives the paxos protocol
-async def paxos_client(client, db, key, version, obj=b''):
+async def paxos_client(rpc, db, key, version, obj=b''):
     seq = int(time.strftime('%Y%m%d%H%M%S'))
     url = f'db/{db}/key/{key}/version/{version}/proposal_seq/{seq}'
 
@@ -119,9 +119,7 @@ async def paxos_client(client, db, key, version, obj=b''):
         value = gzip.compress(json.dumps(obj).encode())
 
     # Paxos PROMISE phase - block stale writers
-    res = await client.filtered(f'promise/{url}')
-    if client.quorum > len(res):
-        raise Exception('NO_PROMISE_QUORUM')
+    res = await rpc.quorum_invoke(f'promise/{url}')
 
     # CRUX of the paxos protocol - Find the most recent accepted value
     accepted_seq = 0
@@ -130,9 +128,7 @@ async def paxos_client(client, db, key, version, obj=b''):
             accepted_seq, value = v['accepted_seq'], v['value']
 
     # Paxos ACCEPT phase - propose the value found above
-    res = await client.filtered(f'accept/{url}', value)
-    if client.quorum > len(res):
-        raise Exception('NO_ACCEPT_QUORUM')
+    res = await rpc.quorum_invoke(f'accept/{url}', value)
 
     # Validate that a row with this version was successfully created in the db
     if not all([1 == v['count'] for v in res.values()]):
@@ -143,25 +139,21 @@ async def paxos_client(client, db, key, version, obj=b''):
 
 
 async def get(ctx, db, key=None):
-    client = ctx.get('client', RPCClient(G.cert, G.cert, G.servers))
+    rpc = ctx.get('rpc', RPCClient(G.cert, G.cert, G.servers))
 
     if key is None:
-        res = await client.filtered(f'fetch/db/{db}')
-        if client.quorum > len(res):
-            raise Exception('NO_READ_QUORUM')
+        res = await rpc.quorum_invoke(f'fetch/db/{db}')
 
-        result = dict()
+        keys = dict()
         for values in res.values():
             for key, version in values:
-                if version > result.get(key, 0):
-                    result[key] = version
+                if version > keys.get(key, 0):
+                    keys[key] = version
 
-        return result
+        return dict(db=db, keys=keys)
     else:
-        for i in range(client.quorum):
-            res = await client.filtered(f'fetch/db/{db}/key/{key}')
-            if client.quorum > len(res):
-                raise Exception('NO_READ_QUORUM')
+        for i in range(rpc.quorum):
+            res = await rpc.quorum_invoke(f'fetch/db/{db}/key/{key}')
 
             vlist = [v for v in res.values()]
             if all([vlist[0] == v for v in vlist]):
@@ -173,7 +165,7 @@ async def get(ctx, db, key=None):
 
                 return result
 
-            await paxos_client(client, db, key, max([v[0] for v in vlist]))
+            await paxos_client(rpc, db, key, max([v[0] for v in vlist]))
 
 
 def get_hmac(secret, salt):
@@ -181,18 +173,18 @@ def get_hmac(secret, salt):
 
 
 async def put(ctx, db, secret, key, version, obj):
-    ctx['client'] = RPCClient(G.cert, G.cert, G.servers)
+    ctx['rpc'] = RPCClient(G.cert, G.cert, G.servers)
 
-    result = await get(ctx, db, '#')
-    if result['value']['hmac'] != get_hmac(secret, result['value']['salt']):
+    res = await get(ctx, db, '#')
+    if res['value']['hmac'] != get_hmac(secret, res['value']['salt']):
         raise Exception('Authentication Failed')
 
-    return await paxos_client(ctx['client'], db, key, version, obj)
+    return await paxos_client(ctx['rpc'], db, key, version, obj)
 
 
 # Initialize the db and generate api key
 async def init(ctx, db, secret=None):
-    ctx['client'] = RPCClient(G.cert, G.cert, G.servers)
+    ctx['rpc'] = RPCClient(G.cert, G.cert, G.servers)
 
     version = 1
     if secret is not None:
@@ -205,7 +197,7 @@ async def init(ctx, db, secret=None):
     salt = str(uuid.uuid4())
     secret = str(uuid.uuid4())
 
-    res = await paxos_client(ctx['client'], db, '#', version,
+    res = await paxos_client(ctx['rpc'], db, '#', version,
                              dict(salt=salt, hmac=get_hmac(secret, salt)))
     if 'OK' == res['status']:
         res['secret'] = secret
@@ -217,15 +209,20 @@ class RPCClient(httprpc.Client):
     def __init__(self, cacert, cert, servers):
         super().__init__(cacert, cert, servers)
 
-    async def filtered(self, resource, octets=b''):
+    async def quorum_invoke(self, resource, octets=b''):
         res = await self.cluster(resource, octets)
         result = dict()
 
+        exceptions = list()
         for s, r in zip(self.conns.keys(), res):
             if isinstance(r, Exception):
                 log(f'{s} {type(r)} {r}')
+                exceptions.append(f'\n-{s}\n{r}')
             else:
                 result[s] = r
+
+        if len(result) < self.quorum:
+            raise Exception('\n'.join(exceptions))
 
         return result
 
