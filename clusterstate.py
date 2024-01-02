@@ -33,7 +33,6 @@ async def fetch(ctx, db, key=None):
         if key is None:
             return db.execute('''select key, version from paxos
                                  where accepted_seq > 0
-                                 order by key, version
                               ''').fetchall()
         else:
             row = db.execute('''select version, accepted_seq, value from paxos
@@ -54,13 +53,6 @@ async def paxos_server(ctx, db, key, version, proposal_seq, octets=None):
 
     db = connect_db(db)
     try:
-        current_version = db.execute('''select max(version) from paxos
-                                        where key=? and accepted_seq > 0
-                                     ''', [key]).fetchone()[0]
-
-        if current_version is not None and version < current_version:
-            raise Exception(f'STALE_VERSION - {version}')
-
         db.execute('insert or ignore into paxos values(?,?,0,0,null)',
                    [key, version])
 
@@ -99,6 +91,13 @@ async def paxos_server(ctx, db, key, version, proposal_seq, octets=None):
                           set promised_seq=?, accepted_seq=?, value=?
                           where key=? and version=?
                        ''', [proposal_seq, proposal_seq, octets, key, version])
+
+            db.execute('''delete from paxos
+                          where key=? and version < (
+                              select max(version)
+                              from paxos
+                              where key=? and accepted_seq > 0)
+                       ''', [key, key])
             db.commit()
 
             return dict(count=db.execute(
@@ -177,33 +176,33 @@ async def put(ctx, db, secret, key, version, obj):
     ctx['rpc'] = RPCClient(G.cert, G.cert, G.servers)
 
     res = await get(ctx, db, '#')
-    if res['value']['hmac'] != get_hmac(secret, res['value']['salt']):
-        raise Exception('Authentication Failed')
+    if res['value']['hmac'] == get_hmac(secret, res['value']['salt']):
+        return await paxos_client(ctx['rpc'], db, key, version, obj)
 
-    return await paxos_client(ctx['rpc'], db, key, version, obj)
+    raise Exception('Authentication Failed')
 
 
 # Initialize the db and generate api key
-async def init(ctx, db, secret=None):
+async def init(ctx, db, secret=''):
     ctx['rpc'] = RPCClient(G.cert, G.cert, G.servers)
 
-    version = 1
-    if secret is not None:
-        res = await get(ctx, db, '#')
-        if res['value']['hmac'] != get_hmac(secret, res['value']['salt']):
-            raise Exception('Authentication Failed')
+    res = await get(ctx, db, '#')
+    if 0 == res['version']:
+        salt = str(uuid.uuid4())
+        res['value'] = dict(salt=salt, hmac=get_hmac('', salt))
 
-        version = res['version'] + 1
+    if res['value']['hmac'] == get_hmac(secret, res['value']['salt']):
+        salt = str(uuid.uuid4())
+        secret = str(uuid.uuid4())
 
-    salt = str(uuid.uuid4())
-    secret = str(uuid.uuid4())
+        res = await paxos_client(ctx['rpc'], db, '#', res['version'] + 1,
+                                 dict(salt=salt, hmac=get_hmac(secret, salt)))
+        if 'OK' == res['status']:
+            res['secret'] = secret
 
-    res = await paxos_client(ctx['rpc'], db, '#', version,
-                             dict(salt=salt, hmac=get_hmac(secret, salt)))
-    if 'OK' == res['status']:
-        res['secret'] = secret
+        return res
 
-    return res
+    raise Exception('Authentication Failed')
 
 
 class RPCClient(httprpc.Client):
