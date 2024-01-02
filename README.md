@@ -1,5 +1,5 @@
-# Cluster Config
-Highly Available store for configuration variables
+# Cluster State
+Highly Available store for config and state
  * Compare and Swap updates
  * Replicated and Strongly Consistent
  * Paxos for leaderless, synchronous and consistent replication

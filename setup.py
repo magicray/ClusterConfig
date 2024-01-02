@@ -5,7 +5,7 @@ setup(
   name='ClusterState',
   py_modules=['clusterstate'],
   version=time.strftime('%Y%m%d'),
-  description='Highly Available key value store for atomic updates - '
+  description='Highly Available key value store with atomic updates - '
               'Replicated and Strongly Consistent',
   long_description='Leaderless. '
                    'Paxos for synchronous and consistent replication. '
