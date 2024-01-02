@@ -135,6 +135,7 @@ async def paxos_client(rpc, db, key, version, obj=b''):
         raise Exception('ACCEPT_FAILED')
 
     return dict(db=db, key=key, version=version,
+                value=json.loads(gzip.decompress(value).decode()),
                 status='CONFLICT' if accepted_seq > 0 else 'OK')
 
 
