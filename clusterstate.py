@@ -13,9 +13,9 @@ from logging import critical as log
 
 
 def connect_db(db):
-    os.makedirs('cluster_config', exist_ok=True)
+    os.makedirs('cluster_state', exist_ok=True)
 
-    db = sqlite3.connect(os.path.join('cluster_config', db + '.sqlite3'))
+    db = sqlite3.connect(os.path.join('cluster_state', db + '.sqlite3'))
     db.execute('''create table if not exists paxos(
                       key          text,
                       version      int,

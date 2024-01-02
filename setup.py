@@ -2,8 +2,8 @@ import time
 from distutils.core import setup
 
 setup(
-  name='ClusterConfig',
-  py_modules=['clusterconfig'],
+  name='ClusterState',
+  py_modules=['clusterstate'],
   version=time.strftime('%Y%m%d'),
   description='Highly Available key value store for atomic updates - '
               'Replicated and Strongly Consistent',
