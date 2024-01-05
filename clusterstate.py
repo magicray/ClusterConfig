@@ -100,9 +100,14 @@ async def paxos_server(ctx, db, key, version, proposal_seq, octets=None):
                        ''', [key, key])
             db.commit()
 
-            return dict(count=db.execute(
+            count = db.execute(
               'select count(*) from paxos where key=? and version=?',
-              [key, version]).fetchone()[0])
+              [key, version]).fetchone()[0]
+
+            if 1 != count:
+                raise Exception(f'CONSTRAINT_VIOLATED count({count})')
+
+            return count
     finally:
         db.rollback()
         db.close()
@@ -128,10 +133,6 @@ async def paxos_client(rpc, db, key, version, obj=b''):
 
     # Paxos ACCEPT phase - propose the value found above
     res = await rpc.quorum_invoke(f'accept/{url}', value)
-
-    # Validate that a row with this version was successfully created in the db
-    if not all([1 == v['count'] for v in res.values()]):
-        raise Exception('ACCEPT_FAILED')
 
     return dict(db=db, key=key, version=version,
                 value=json.loads(gzip.decompress(value).decode()),
