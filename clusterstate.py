@@ -104,10 +104,10 @@ async def paxos_server(ctx, db, key, version, proposal_seq, octets=None):
               'select count(*) from paxos where key=? and version=?',
               [key, version]).fetchone()[0]
 
-            if 1 != count:
-                raise Exception(f'CONSTRAINT_VIOLATED count({count})')
+            if 1 == count:
+                return count
 
-            return count
+            raise Exception(f'CONSTRAINT_VIOLATED count({count})')
     finally:
         db.rollback()
         db.close()
