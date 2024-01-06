@@ -65,15 +65,12 @@ async def paxos_server(ctx, db, key, version, proposal_seq, octets=None):
                    from paxos where key=? and version=?
                 ''', [key, version]).fetchone()
 
-            if proposal_seq <= promised_seq:
-                raise Exception(f'PROMISE_SEQ {key}:{version} {proposal_seq}')
-
-            db.execute('''update paxos set promised_seq=?
-                          where key=? and version=?
-                       ''', [proposal_seq, key, version])
-            db.commit()
-
-            return dict(accepted_seq=accepted_seq, value=value)
+            if proposal_seq > promised_seq:
+                db.execute('''update paxos set promised_seq=?
+                              where key=? and version=?
+                           ''', [proposal_seq, key, version])
+                db.commit()
+                return dict(accepted_seq=accepted_seq, value=value)
         else:
             # Paxos ACCEPT - Client has sent the most recent value from the
             # promise phase.
@@ -81,42 +78,38 @@ async def paxos_server(ctx, db, key, version, proposal_seq, octets=None):
                 'select promised_seq from paxos where key=? and version=?',
                 [key, version]).fetchone()[0]
 
-            if proposal_seq < promised_seq:
-                raise Exception(f'ACCEPT_SEQ {key}:{version} {proposal_seq}')
+            if proposal_seq >= promised_seq:
+                db.execute('''update paxos
+                              set promised_seq=?, accepted_seq=?, value=?
+                              where key=? and version=?
+                           ''',
+                           [proposal_seq, proposal_seq, octets, key, version])
 
-            db.execute('delete from paxos where key=? and version<?',
-                       [key, version])
+                db.execute('''delete from paxos
+                              where key=? and version < (
+                                  select max(version)
+                                  from paxos
+                                  where key=? and accepted_seq > 0)
+                           ''', [key, key])
+                db.commit()
 
-            db.execute('''update paxos
-                          set promised_seq=?, accepted_seq=?, value=?
-                          where key=? and version=?
-                       ''', [proposal_seq, proposal_seq, octets, key, version])
-
-            db.execute('''delete from paxos
-                          where key=? and version < (
-                              select max(version)
-                              from paxos
-                              where key=? and accepted_seq > 0)
-                       ''', [key, key])
-            db.commit()
-
-            count = db.execute(
-              'select count(*) from paxos where key=? and version=?',
-              [key, version]).fetchone()[0]
-
-            if 1 == count:
-                return count
-
-            raise Exception(f'CONSTRAINT_VIOLATED count({count})')
+                return db.execute('''select version, accepted_seq, value
+                                     from paxos
+                                     where key=? and accepted_seq > 0
+                                     order by version desc limit 1
+                                  ''', [key]).fetchone()
     finally:
         db.rollback()
         db.close()
+
+    raise Exception(f'STALE_PROPOSAL_SEQ {key}:{version} {proposal_seq}')
 
 
 # PROPOSE - Drives the paxos protocol
 async def paxos_client(rpc, db, key, version, obj=b''):
     seq = int(time.strftime('%Y%m%d%H%M%S'))
     url = f'db/{db}/key/{key}/version/{version}/proposal_seq/{seq}'
+    version = int(version)
 
     if obj != b'':
         # value to be set should always be json serializable
@@ -134,9 +127,15 @@ async def paxos_client(rpc, db, key, version, obj=b''):
     # Paxos ACCEPT phase - propose the value found above
     res = await rpc.quorum_invoke(f'accept/{url}', value)
 
-    return dict(db=db, key=key, version=version,
-                value=json.loads(gzip.decompress(value).decode()),
-                status='CONFLICT' if accepted_seq > 0 else 'OK')
+    vlist = sorted(res.values(), reverse=True)
+    status = 'STALE'
+
+    if all([vlist[0] == v for v in vlist]) and vlist[0][0] == version:
+        if 0 == accepted_seq and value == vlist[0][2]:
+            status = 'OK'
+
+    return dict(db=db, key=key, version=vlist[0][0], status=status,
+                value=json.loads(gzip.decompress(vlist[0][2]).decode()))
 
 
 async def get(ctx, db, key=None):
