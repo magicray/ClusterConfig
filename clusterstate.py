@@ -113,7 +113,7 @@ async def paxos_client(rpc, db, key, version, obj=b''):
 
     if obj != b'':
         # value to be set should always be json serializable
-        value = gzip.compress(json.dumps(obj).encode())
+        obj = value = gzip.compress(json.dumps(obj).encode())
 
     # Paxos PROMISE phase - block stale writers
     res = await rpc.quorum_invoke(f'promise/{url}')
@@ -127,15 +127,18 @@ async def paxos_client(rpc, db, key, version, obj=b''):
     # Paxos ACCEPT phase - propose the value found above
     res = await rpc.quorum_invoke(f'accept/{url}', value)
 
-    vlist = sorted(res.values(), reverse=True)
-    status = 'STALE'
+    vlist = list(res.values())
+    result = dict(db=db, key=key, status='CONFLICT')
 
-    if all([vlist[0] == v for v in vlist]) and vlist[0][0] == version:
-        if 0 == accepted_seq and value == vlist[0][2]:
-            status = 'OK'
+    if all([vlist[0] == v for v in vlist]):
+        result['value'] = json.loads(gzip.decompress(value).decode())
+        result['version'] = vlist[0][0]
 
-    return dict(db=db, key=key, version=vlist[0][0], status=status,
-                value=json.loads(gzip.decompress(vlist[0][2]).decode()))
+        if 0 == accepted_seq and version == vlist[0][0]:
+            assert (obj == vlist[0][2])
+            result['status'] = 'OK'
+
+    return result
 
 
 async def get(ctx, db, key=None):
