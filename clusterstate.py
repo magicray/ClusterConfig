@@ -70,6 +70,7 @@ async def paxos_server(ctx, db, key, version, proposal_seq, octets=None):
                               where key=? and version=?
                            ''', [proposal_seq, key, version])
                 db.commit()
+
                 return dict(accepted_seq=accepted_seq, value=value)
         else:
             # Paxos ACCEPT - Client has sent the most recent value from the
@@ -91,13 +92,15 @@ async def paxos_server(ctx, db, key, version, proposal_seq, octets=None):
                                   from paxos
                                   where key=? and accepted_seq > 0)
                            ''', [key, key])
+
+                row = db.execute('''select version, accepted_seq, value
+                                    from paxos
+                                    where key=? and accepted_seq > 0
+                                    order by version desc limit 1
+                                 ''', [key]).fetchone()
                 db.commit()
 
-                return db.execute('''select version, accepted_seq, value
-                                     from paxos
-                                     where key=? and accepted_seq > 0
-                                     order by version desc limit 1
-                                  ''', [key]).fetchone()
+                return row
     finally:
         db.rollback()
         db.close()
