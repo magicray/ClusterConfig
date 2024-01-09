@@ -1,6 +1,10 @@
 #!/bin/bash
 
+DB=$(grep '"db": ' $1 | cut -d'"' -f4)
+SECRET=$(grep '"secret": ' $1 | cut -d'"' -f4)
+SERVER=$(head -n 1 $1)
+
 cat - | gzip - | curl -k --compressed                               \
-    https:/$1/put/db/$2/secret/$3/key/$4/version/$5                 \
+    https:/$SERVER/put/db/$DB/secret/$SECRET/key/$2/version/$3      \
     -H 'Content-Type: application/json' -H 'Content-Encoding: gzip' \
     --data-binary @-

@@ -189,13 +189,19 @@ async def put(ctx, db, secret, key, version, obj):
 
 
 # Initialize the db and generate api key
-async def init(ctx, db, secret=''):
+async def init(ctx, db=None, secret=None):
     ctx['rpc'] = RPCClient(G.cert, G.cert, G.servers)
 
-    res = await get(ctx, db, '#')
-    if 0 == res['version']:
+    if db and secret:
+        res = await get(ctx, db, '#')
+    elif not db and not secret:
+        db = str(uuid.uuid4())
         salt = str(uuid.uuid4())
-        res['value'] = dict(salt=salt, hmac=get_hmac('', salt))
+        secret = str(uuid.uuid4())
+        res = dict(version=0)
+        res['value'] = dict(salt=salt, hmac=get_hmac(secret, salt))
+    else:
+        raise Exception('DB_OR_SECRET_MISSING')
 
     if res['value']['hmac'] == get_hmac(secret, res['value']['salt']):
         salt = str(uuid.uuid4())

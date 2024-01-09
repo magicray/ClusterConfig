@@ -1,7 +1,7 @@
 #!/bin/bash
 
-if [ $# -gt 2 ]; then
-    curl -k --compressed https:/$1/get/db/$2/key/$3
-else
-    curl -k --compressed https:/$1/get/db/$2
-fi
+DB=$(grep '"db": ' $1 | cut -d'"' -f4)
+SECRET=$(grep '"secret": ' $1 | cut -d'"' -f4)
+SERVER=$(head -n 1 $1)
+
+curl -k --compressed https:/$SERVER/get/db/$DB/key/$2

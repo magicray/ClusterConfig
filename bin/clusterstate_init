@@ -1,7 +1,13 @@
-#!/bin/bash
+#!/bin/bash -e
 
-if [ $# -gt 2 ]; then
-    curl -k --compressed https:/$1/init/db/$2/secret/$3
-else
-    curl -k --compressed https:/$1/init/db/$2
-fi
+DB=$(grep '"db": ' $1 | cut -d'"' -f4)
+SECRET=$(grep '"secret": ' $1 | cut -d'"' -f4)
+SERVER=$(head -n 1 $1)
+
+OUT=$(curl -sk --compressed https:/$SERVER/init/db/$DB/secret/$SECRET)
+
+TMP=.clusterstate.tmp.$(uuid)
+echo $SERVER > $TMP
+echo $OUT | python3 -mjson.tool >> $TMP
+mv $TMP $1
+cat $1
