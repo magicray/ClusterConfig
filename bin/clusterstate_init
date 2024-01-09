@@ -5,10 +5,17 @@ SECRET=$(grep 'secret: ' $1 | cut -d' ' -f2)
 SERVER=$(grep 'server: ' $1 | cut -d' ' -f2)
 VERSION=$(grep 'version: ' $1 | cut -d' ' -f2)
 
+NEWFILE=$1
+if [ $VERSION ]; then
+    NEWFILE=$(echo $1 | sed s/\.$VERSION$//g)
+fi
+
 TMP=.clusterstate.tmp.$(uuid)
 curl -sk --compressed https:/$SERVER/init/db/$DB/secret/$SECRET > $TMP
-echo >> $TMP
-echo server: $SERVER >> $TMP
-mv $1 $1.$VERSION
-mv $TMP $1
-cat $1
+VERSION=$(grep 'version: ' $TMP | cut -d' ' -f2)
+
+if [ $VERSION ]; then
+    echo -e "\nserver: $SERVER" >> $TMP
+    mv $TMP $NEWFILE.$VERSION
+    cat $NEWFILE.$VERSION
+fi
