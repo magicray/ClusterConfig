@@ -210,9 +210,7 @@ async def init(ctx, db=None, secret=None):
         res = await paxos_client(ctx['rpc'], db, '#', res['version'] + 1,
                                  dict(salt=salt, hmac=get_hmac(secret, salt)))
         if 'OK' == res['status']:
-            res['secret'] = secret
-
-        return res
+            return f"db: {db}\nversion: {res['version']}\nsecret: {secret}"
 
     raise Exception('Authentication Failed')
 

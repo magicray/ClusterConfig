@@ -1,13 +1,14 @@
 #!/bin/bash -e
 
-DB=$(grep '"db": ' $1 | cut -d'"' -f4)
-SECRET=$(grep '"secret": ' $1 | cut -d'"' -f4)
-SERVER=$(head -n 1 $1)
-
-OUT=$(curl -sk --compressed https:/$SERVER/init/db/$DB/secret/$SECRET)
+DB=$(grep 'db: ' $1 | cut -d' ' -f2)
+SECRET=$(grep 'secret: ' $1 | cut -d' ' -f2)
+SERVER=$(grep 'server: ' $1 | cut -d' ' -f2)
+VERSION=$(grep 'version: ' $1 | cut -d' ' -f2)
 
 TMP=.clusterstate.tmp.$(uuid)
-echo $SERVER > $TMP
-echo $OUT | python3 -mjson.tool >> $TMP
+curl -sk --compressed https:/$SERVER/init/db/$DB/secret/$SECRET > $TMP
+echo >> $TMP
+echo server: $SERVER >> $TMP
+mv $1 $1.$VERSION
 mv $TMP $1
 cat $1
