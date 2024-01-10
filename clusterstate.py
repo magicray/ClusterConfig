@@ -210,7 +210,8 @@ async def init(ctx, db=None, secret=None):
         res = await paxos_client(ctx['rpc'], db, '#', res['version'] + 1,
                                  dict(salt=salt, hmac=get_hmac(secret, salt)))
         if 'OK' == res['status']:
-            return f"db: {db}\nversion: {res['version']}\nsecret: {secret}"
+            res['secret'] = secret
+            return res
 
     raise Exception('Authentication Failed')
 
@@ -218,6 +219,7 @@ async def init(ctx, db=None, secret=None):
 class RPCClient(httprpc.Client):
     def __init__(self, cacert, cert, servers):
         super().__init__(cacert, cert, servers)
+        self.quorum = max(self.quorum, G.quorum)
 
     async def quorum_invoke(self, resource, octets=b''):
         res = await self.cluster(resource, octets)
@@ -243,6 +245,8 @@ if '__main__' == __name__:
     G = argparse.ArgumentParser()
     G.add_argument('--cert', help='certificate path')
     G.add_argument('--port', help='port number for server')
+    G.add_argument('--quorum', type=int, default=0,
+                   help='overrides the auto calculated value')
     G.add_argument('--servers', help='comma separated list of server ip:port')
     G = G.parse_args()
 
