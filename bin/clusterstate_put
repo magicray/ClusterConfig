@@ -1,8 +1,8 @@
 #!/bin/bash
 
-DB=$(grep 'db: ' $1 | cut -d' ' -f2)
-SECRET=$(grep 'secret: ' $1 | cut -d' ' -f2)
-SERVER=$(grep 'server: ' $1 | cut -d' ' -f2)
+DB=$(grep 'db: ' $1 | tail -n 1 | cut -d' ' -f2)
+SECRET=$(grep 'secret: ' $1 | tail -n 1 | cut -d' ' -f2)
+SERVER=$(grep 'server: ' $1 | tail -n 1 | cut -d' ' -f2)
 
 cat - | gzip - | curl -k --compressed                               \
     https:/$SERVER/put/db/$DB/secret/$SECRET/key/$2/version/$3      \

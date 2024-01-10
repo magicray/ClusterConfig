@@ -1,21 +1,20 @@
 #!/bin/bash -e
 
-DB=$(grep 'db: ' $1 | cut -d' ' -f2)
-SECRET=$(grep 'secret: ' $1 | cut -d' ' -f2)
-SERVER=$(grep 'server: ' $1 | cut -d' ' -f2)
-VERSION=$(grep 'version: ' $1 | cut -d' ' -f2)
-
-NEWFILE=$1
-if [ $VERSION ]; then
-    NEWFILE=$(echo $1 | sed s/\.$VERSION$//g)
-fi
+DB=$(grep 'db: ' $1 | tail -n 1 | cut -d' ' -f2)
+SECRET=$(grep 'secret: ' $1 | tail -n 1 | cut -d' ' -f2)
+SERVER=$(grep 'server: ' $1 | tail -n 1 | cut -d' ' -f2)
 
 TMP=.clusterstate.tmp.$(uuid)
 curl -sk --compressed https:/$SERVER/init/db/$DB/secret/$SECRET > $TMP
+
+SECRET=$(grep 'secret: ' $TMP | cut -d' ' -f2)
 VERSION=$(grep 'version: ' $TMP | cut -d' ' -f2)
 
-if [ $VERSION ]; then
-    echo -e "\nserver: $SERVER" >> $TMP
-    mv $TMP $NEWFILE.$VERSION
-    cat $NEWFILE.$VERSION
+if [ ! $DB ]; then
+    DB=$(grep 'db: ' $TMP | cut -d' ' -f2)
+    echo db: $DB | tee -a $1
 fi
+echo version: $VERSION | tee -a $1
+echo secret: $SECRET | tee -a $1
+
+rm $TMP
