@@ -31,10 +31,13 @@ async def fetch(ctx, db, key=None):
     db = connect_db(db)
     try:
         if key is None:
+            # All accepted keys
             return db.execute('''select key, version from paxos
                                  where accepted_seq > 0
                               ''').fetchall()
         else:
+            # Most recent version of this key
+            # Ideally, there would be either 0 or 1 rows
             row = db.execute('''select version, value from paxos
                                 where key=? and accepted_seq > 0
                                 order by version desc limit 1
@@ -47,6 +50,10 @@ async def fetch(ctx, db, key=None):
 async def paxos_server(ctx, db, key, version, proposal_seq, octets=None):
     version = int(version)
     proposal_seq = int(proposal_seq)
+
+    if time.time() > proposal_seq + 10 or time.time() < proposal_seq - 10:
+        # For liveness - out of sync clocks can block further rounds
+        raise Exception('CLOCKS_OUT_OF_SYNC')
 
     db = connect_db(db)
     try:
@@ -90,6 +97,7 @@ async def paxos_server(ctx, db, key, version, proposal_seq, octets=None):
                                   where key=? and accepted_seq > 0)
                            ''', [key, key])
 
+                # Delete older versions of the value
                 row = db.execute('''select version, accepted_seq, value
                                     from paxos
                                     where key=? and accepted_seq > 0
@@ -107,7 +115,7 @@ async def paxos_server(ctx, db, key, version, proposal_seq, octets=None):
 
 # PROPOSE - Drives the paxos protocol
 async def paxos_client(rpc, db, key, version, obj=b''):
-    seq = int(time.strftime('%Y%m%d%H%M%S'))
+    seq = int(time.time())  # Current timestamp is a good enough seq
     url = f'db/{db}/key/{key}/version/{version}/proposal_seq/{seq}'
     version = int(version)
 
@@ -130,10 +138,14 @@ async def paxos_client(rpc, db, key, version, obj=b''):
     vlist = list(res.values())
     result = dict(db=db, key=key, status='CONFLICT')
 
+    # All nodes returned the same row
     if all([vlist[0] == v for v in vlist]):
         result['value'] = json.loads(gzip.decompress(value).decode())
         result['version'] = vlist[0][0]
 
+        # Accept was successful and our value was proposed
+        # If this was not true, then we proposed value from a previous round
+        # and the status would still be conflict
         if 0 == accepted_seq and version == vlist[0][0]:
             assert (obj == vlist[0][2])
             result['status'] = 'OK'
@@ -168,8 +180,8 @@ async def get(ctx, db, key=None):
 
                 return result
 
-            await paxos_client(
-                rpc, db, key, max([v[0] for v in vlist if v[0] is not None]))
+            max_version = max([v[0] for v in vlist if v[0] is not None])
+            await paxos_client(rpc, db, key, max_version)
 
 
 def get_hmac(secret, salt):
