@@ -35,11 +35,11 @@ async def fetch(ctx, db, key=None):
                                  where accepted_seq > 0
                               ''').fetchall()
         else:
-            row = db.execute('''select version, accepted_seq, value from paxos
+            row = db.execute('''select version, value from paxos
                                 where key=? and accepted_seq > 0
                                 order by version desc limit 1
                              ''', [key]).fetchone()
-            return row if row else [0, 0, None]
+            return row if row else [None, None]
     finally:
         db.close()
 
@@ -47,9 +47,6 @@ async def fetch(ctx, db, key=None):
 async def paxos_server(ctx, db, key, version, proposal_seq, octets=None):
     version = int(version)
     proposal_seq = int(proposal_seq)
-
-    if version < 1:
-        raise Exception(f'INVALID_VERSION - {version}')
 
     db = connect_db(db)
     try:
@@ -153,7 +150,7 @@ async def get(ctx, db, key=None):
         keys = dict()
         for values in res.values():
             for key, version in values:
-                if version > keys.get(key, 0):
+                if key not in keys or version > keys[key]:
                     keys[key] = version
 
         return dict(db=db, keys=keys)
@@ -165,13 +162,14 @@ async def get(ctx, db, key=None):
             if all([vlist[0] == v for v in vlist]):
                 result = dict(db=db, key=key, version=vlist[0][0])
 
-                if vlist[0][0] > 0:
-                    value = gzip.decompress(vlist[0][2])
+                if vlist[0][0] is not None:
+                    value = gzip.decompress(vlist[0][1])
                     result['value'] = json.loads(value.decode())
 
                 return result
 
-            await paxos_client(rpc, db, key, max([v[0] for v in vlist]))
+            await paxos_client(
+                rpc, db, key, max([v[0] for v in vlist if v[0] is not None]))
 
 
 def get_hmac(secret, salt):
@@ -195,11 +193,8 @@ async def init(ctx, db=None, secret=None):
     if db and secret:
         res = await get(ctx, db, '#')
     elif not db and not secret:
-        db = str(uuid.uuid4())
-        salt = str(uuid.uuid4())
-        secret = str(uuid.uuid4())
-        res = dict(version=0)
-        res['value'] = dict(salt=salt, hmac=get_hmac(secret, salt))
+        secret = db = str(uuid.uuid4())
+        res = dict(version=0, value=dict(salt=db, hmac=get_hmac(db, db)))
     else:
         raise Exception('DB_OR_SECRET_MISSING')
 
@@ -210,8 +205,7 @@ async def init(ctx, db=None, secret=None):
         res = await paxos_client(ctx['rpc'], db, '#', res['version'] + 1,
                                  dict(salt=salt, hmac=get_hmac(secret, salt)))
         if 'OK' == res['status']:
-            res['secret'] = secret
-            return res
+            return dict(db=db, secret=secret, version=res['version'])
 
     raise Exception('Authentication Failed')
 
