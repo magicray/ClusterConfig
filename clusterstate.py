@@ -90,6 +90,7 @@ async def paxos_server(ctx, db, key, version, proposal_seq, octets=None):
                            ''',
                            [proposal_seq, proposal_seq, octets, key, version])
 
+                # Delete older versions of the value
                 db.execute('''delete from paxos
                               where key=? and version < (
                                   select max(version)
@@ -97,7 +98,6 @@ async def paxos_server(ctx, db, key, version, proposal_seq, octets=None):
                                   where key=? and accepted_seq > 0)
                            ''', [key, key])
 
-                # Delete older versions of the value
                 row = db.execute('''select version, accepted_seq, value
                                     from paxos
                                     where key=? and accepted_seq > 0
