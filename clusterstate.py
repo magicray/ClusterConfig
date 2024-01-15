@@ -38,11 +38,10 @@ async def fetch(ctx, db, key=None):
         else:
             # Most recent version of this key
             # Ideally, there would be either 0 or 1 rows
-            row = db.execute('''select version, value from paxos
-                                where key=? and accepted_seq > 0
-                                order by version desc limit 1
-                             ''', [key]).fetchone()
-            return row if row else [None, None]
+            return db.execute('''select version, value from paxos
+                                 where key=? and accepted_seq > 0
+                                 order by version desc limit 1
+                              ''', [key]).fetchone()
     finally:
         db.close()
 
@@ -124,18 +123,14 @@ async def paxos_client(rpc, db, key, version, obj=b''):
         obj = value = gzip.compress(json.dumps(obj).encode())
 
     # Paxos PROMISE phase - block stale writers
-    res = await rpc.quorum_invoke(f'promise/{url}')
-
-    # CRUX of the paxos protocol - Find the most recent accepted value
     accepted_seq = 0
-    for v in res.values():
+    for v in await rpc.quorum_invoke(f'promise/{url}'):
+        # CRUX of the paxos protocol - Find the most recent accepted value
         if v['accepted_seq'] > accepted_seq:
             accepted_seq, value = v['accepted_seq'], v['value']
 
     # Paxos ACCEPT phase - propose the value found above
-    res = await rpc.quorum_invoke(f'accept/{url}', value)
-
-    vlist = list(res.values())
+    vlist = await rpc.quorum_invoke(f'accept/{url}', value)
     result = dict(db=db, key=key, status='CONFLICT')
 
     # All nodes returned the same row
@@ -157,10 +152,8 @@ async def get(ctx, db, key=None):
     rpc = ctx.get('rpc', RPCClient(G.cert, G.cert, G.servers))
 
     if key is None:
-        res = await rpc.quorum_invoke(f'fetch/db/{db}')
-
         keys = dict()
-        for values in res.values():
+        for values in await rpc.quorum_invoke(f'fetch/db/{db}'):
             for key, version in values:
                 if key not in keys or version > keys[key]:
                     keys[key] = version
@@ -168,17 +161,15 @@ async def get(ctx, db, key=None):
         return dict(db=db, keys=keys)
     else:
         for i in range(rpc.quorum):
-            res = await rpc.quorum_invoke(f'fetch/db/{db}/key/{key}')
+            vlist = await rpc.quorum_invoke(f'fetch/db/{db}/key/{key}')
 
-            vlist = [v for v in res.values()]
             if all([vlist[0] == v for v in vlist]):
-                result = dict(db=db, key=key, version=vlist[0][0])
+                if vlist[0] is None:
+                    return dict(db=db, key=key, version=None)
 
-                if vlist[0][0] is not None:
-                    value = gzip.decompress(vlist[0][1])
-                    result['value'] = json.loads(value.decode())
-
-                return result
+                return dict(
+                    db=db, key=key, version=vlist[0][0],
+                    value=json.loads(gzip.decompress(vlist[0][1]).decode()))
 
             max_version = max([v[0] for v in vlist if v[0] is not None])
             await paxos_client(rpc, db, key, max_version)
@@ -229,7 +220,7 @@ class RPCClient(httprpc.Client):
 
     async def quorum_invoke(self, resource, octets=b''):
         res = await self.cluster(resource, octets)
-        result = dict()
+        result = list()
 
         exceptions = list()
         for s, r in zip(self.conns.keys(), res):
@@ -237,7 +228,7 @@ class RPCClient(httprpc.Client):
                 log(f'{s} {type(r)} {r}')
                 exceptions.append(f'\n-{s}\n{r}')
             else:
-                result[s] = r
+                result.append(r)
 
         if len(result) < self.quorum:
             raise Exception('\n'.join(exceptions))

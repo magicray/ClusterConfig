@@ -1,7 +1,0 @@
-#!/bin/bash
-
-DB=$(grep 'db: ' $1 | tail -n 1 | cut -d' ' -f2)
-SECRET=$(grep 'secret: ' $1 | tail -n 1 | cut -d' ' -f2)
-SERVER=$(grep 'server: ' $1 | tail -n 1 | cut -d' ' -f2)
-
-curl -k --compressed https:/$SERVER/get/db/$DB/key/$2

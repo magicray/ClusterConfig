@@ -3,6 +3,7 @@ from distutils.core import setup
 
 setup(
   name='ClusterState',
+  scripts=['clusterstate'],
   py_modules=['clusterstate'],
   version=time.strftime('%Y%m%d'),
   description='Highly Available key value store with atomic updates - '
