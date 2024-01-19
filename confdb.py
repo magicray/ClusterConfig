@@ -12,23 +12,12 @@ import argparse
 from logging import critical as log
 
 
-def connect_db(db):
-    os.makedirs('confdb', exist_ok=True)
-
-    db = sqlite3.connect(os.path.join('confdb', db + '.sqlite3'))
-    db.execute('''create table if not exists paxos(
-                      key          text,
-                      version      int,
-                      promised_seq int,
-                      accepted_seq int,
-                      value        blob,
-                      primary key(key, version)
-                  )''')
-    return db
-
-
 async def fetch(ctx, db, key=None):
-    db = connect_db(db)
+    db = os.path.join('confdb', db + '.sqlite3')
+    if not os.path.isfile(db):
+        raise Exception('NOT_INITIALIZED')
+
+    db = sqlite3.connect(db)
     try:
         if key is None:
             # All accepted keys
@@ -54,7 +43,16 @@ async def paxos_server(ctx, db, key, version, proposal_seq, octets=None):
         # For liveness - out of sync clocks can block further rounds
         raise Exception('CLOCKS_OUT_OF_SYNC')
 
-    db = connect_db(db)
+    os.makedirs('confdb', exist_ok=True)
+    db = sqlite3.connect(os.path.join('confdb', db + '.sqlite3'))
+    db.execute('''create table if not exists paxos(
+                      key          text,
+                      version      int,
+                      promised_seq int,
+                      accepted_seq int,
+                      value        blob,
+                      primary key(key, version)
+                  )''')
     try:
         db.execute('insert or ignore into paxos values(?,?,0,0,null)',
                    [key, version])
