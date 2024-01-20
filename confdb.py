@@ -136,14 +136,13 @@ async def paxos_client(rpc, db, key, version, obj=b''):
 
     # All nodes returned the same row
     if all([vlist[0] == v for v in vlist]):
-        result['value'] = json.loads(gzip.decompress(value).decode())
+        result['value'] = json.loads(gzip.decompress(vlist[0][2]).decode())
         result['version'] = vlist[0][0]
 
         # Accept was successful and our value was proposed
         # If this was not true, then we proposed value from a previous round
         # and the status would still be conflict
-        if 0 == accepted_seq and version == vlist[0][0]:
-            assert (obj == vlist[0][2])
+        if 0 == accepted_seq and version == vlist[0][0] and obj == vlist[0][2]:
             result['status'] = 'OK'
 
     return result
