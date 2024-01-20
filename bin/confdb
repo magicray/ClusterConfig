@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/bash -e
 
 DB=$(grep 'db: ' $1 | tail -n 1 | cut -d' ' -f2)
 SECRET=$(grep 'secret: ' $1 | tail -n 1 | cut -d' ' -f2)
@@ -11,12 +11,14 @@ if [ $2 == 'init' ]; then
     SECRET=$(grep '"secret": ' $TMP | cut -d'"' -f4)
     VERSION=$(grep '"version": ' $TMP | cut -d':' -f2 | cut -d, -f1)
 
-    if [ ! $DB ]; then
-        DB=$(grep '"db": ' $TMP | cut -d'"' -f4)
-        echo db: $DB | tee -a $1
+    if [ $VERSION ] && [ $SECRET ]; then
+        if [ ! $DB ]; then
+            DB=$(grep '"db": ' $TMP | cut -d'"' -f4)
+            echo db: $DB | tee -a $1
+        fi
+        echo version: $VERSION | tee -a $1
+        echo secret: $SECRET | tee -a $1
     fi
-    echo version: $VERSION | tee -a $1
-    echo secret: $SECRET | tee -a $1
 
     rm $TMP
 elif [ $2 == 'put' ]; then
@@ -27,6 +29,6 @@ elif [ $2 == 'put' ]; then
 elif [ $2 == 'get' ]; then
     curl -k --compressed https:/$SERVER/get/db/$DB/key/$3
 else
-    echo 'Wrong command'
+    echo 'Wrong command - Use init/put/get'
     exit 1
 fi
