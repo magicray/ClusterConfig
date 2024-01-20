@@ -43,6 +43,9 @@ async def paxos_server(ctx, db, key, version, proposal_seq, octets=None):
         # For liveness - out of sync clocks can block further rounds
         raise Exception('CLOCKS_OUT_OF_SYNC')
 
+    if not ctx.get('subject', ''):
+        raise Exception('TLS_AUTH_FAILED')
+
     os.makedirs('confdb', exist_ok=True)
     db = sqlite3.connect(os.path.join('confdb', db + '.sqlite3'))
     db.execute('''create table if not exists paxos(
