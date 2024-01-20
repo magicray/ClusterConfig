@@ -6,6 +6,7 @@ setup(
   scripts=['confdb'],
   py_modules=['confdb'],
   version=time.strftime('%Y%m%d'),
+  install_requires=['http-rpc'],
   description='Highly Available key value store with atomic updates - '
               'Replicated and Strongly Consistent',
   long_description='Leaderless. '
