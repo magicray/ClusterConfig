@@ -27,10 +27,11 @@ async def fetch(ctx, db, key=None):
         else:
             # Most recent version of this key
             # Ideally, there would be either 0 or 1 rows
-            return db.execute('''select version, value from paxos
-                                 where key=? and accepted_seq > 0
-                                 order by version desc limit 1
-                              ''', [key]).fetchone()
+            return db.execute(
+                '''select version, value from paxos
+                   where key=? and accepted_seq > 0
+                   order by version desc limit 1
+                ''', [key]).fetchone()
     finally:
         db.close()
 
@@ -84,25 +85,23 @@ async def paxos_server(ctx, db, key, version, proposal_seq, octets=None):
                 [key, version]).fetchone()[0]
 
             if proposal_seq >= promised_seq:
-                db.execute('''update paxos
-                              set promised_seq=?, accepted_seq=?, value=?
-                              where key=? and version=?
-                           ''',
-                           [proposal_seq, proposal_seq, octets, key, version])
+                db.execute(
+                    '''update paxos set promised_seq=?, accepted_seq=?, value=?
+                       where key=? and version=?
+                    ''', [proposal_seq, proposal_seq, octets, key, version])
 
                 # Delete older versions of the value
-                db.execute('''delete from paxos
-                              where key=? and version < (
-                                  select max(version)
-                                  from paxos
-                                  where key=? and accepted_seq > 0)
-                           ''', [key, key])
+                db.execute(
+                    '''delete from paxos where key=? and version < (
+                           select max(version) from paxos
+                           where key=? and accepted_seq > 0)
+                    ''', [key, key])
 
-                row = db.execute('''select version, accepted_seq, value
-                                    from paxos
-                                    where key=? and accepted_seq > 0
-                                    order by version desc limit 1
-                                 ''', [key]).fetchone()
+                row = db.execute(
+                    '''select version, accepted_seq, value from paxos
+                       where key=? and accepted_seq > 0
+                       order by version desc limit 1
+                    ''', [key]).fetchone()
                 db.commit()
 
                 return row
@@ -212,7 +211,6 @@ async def init(ctx, db=None, secret=None):
 class RPCClient(httprpc.Client):
     def __init__(self, cacert, cert, servers):
         super().__init__(cacert, cert, servers)
-        self.quorum = max(self.quorum, G.quorum)
 
     async def quorum_invoke(self, resource, octets=b''):
         res = await self.cluster(resource, octets)
@@ -238,8 +236,6 @@ if '__main__' == __name__:
     G = argparse.ArgumentParser()
     G.add_argument('--cert', help='certificate path')
     G.add_argument('--port', help='port number for server')
-    G.add_argument('--quorum', type=int, default=0,
-                   help='overrides the auto calculated value')
     G.add_argument('--servers', help='comma separated list of server ip:port')
     G = G.parse_args()
 
