@@ -3,7 +3,7 @@ import gzip
 import time
 import json
 import uuid
-import hmac
+import secrets
 import sqlite3
 import logging
 import httprpc
@@ -175,15 +175,11 @@ async def get(ctx, db, key=None):
             await paxos_client(rpc, db, key, max_version)
 
 
-def get_hmac(secret, salt):
-    return hmac.new(secret.encode(), salt.encode(), hashlib.sha256).hexdigest()
-
-
 async def put(ctx, db, secret, key, version, obj):
     ctx['rpc'] = RPCClient(G.cert, G.cert, G.servers)
 
     res = await get(ctx, db, '#')
-    if res['value']['hmac'] == get_hmac(secret, res['value']['salt']):
+    if res['value'] == hashlib.sha512(secret.encode()).hexdigest():
         return await paxos_client(ctx['rpc'], db, key, version, obj)
 
     raise Exception('Authentication Failed')
@@ -197,16 +193,16 @@ async def init(ctx, db=None, secret=None):
         res = await get(ctx, db, '#')
     elif not db and not secret:
         secret = db = str(uuid.uuid4())
-        res = dict(version=0, value=dict(salt=db, hmac=get_hmac(db, db)))
+        res = dict(version=0, value=hashlib.sha512(db.encode()).hexdigest())
     else:
         raise Exception('DB_OR_SECRET_MISSING')
 
-    if res['value']['hmac'] == get_hmac(secret, res['value']['salt']):
-        salt = str(uuid.uuid4())
-        secret = str(uuid.uuid4())
+    if res['value'] == hashlib.sha512(secret.encode()).hexdigest():
+        secret = secrets.token_urlsafe(24)
 
         res = await paxos_client(ctx['rpc'], db, '#', res['version'] + 1,
-                                 dict(salt=salt, hmac=get_hmac(secret, salt)))
+                                 hashlib.sha512(secret.encode()).hexdigest())
+
         if 'OK' == res['status']:
             return dict(db=db, secret=secret, version=res['version'])
 
