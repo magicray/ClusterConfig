@@ -198,7 +198,7 @@ async def init(ctx, db=None, secret=None):
         raise Exception('DB_OR_SECRET_MISSING')
 
     if res['value'] == hashlib.sha512(secret.encode()).hexdigest():
-        secret = secrets.token_urlsafe(24)
+        secret = secrets.token_urlsafe(48)
 
         res = await paxos_client(ctx['rpc'], db, '#', res['version'] + 1,
                                  hashlib.sha512(secret.encode()).hexdigest())
