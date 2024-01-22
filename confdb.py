@@ -2,8 +2,6 @@ import os
 import gzip
 import time
 import json
-import uuid
-import secrets
 import sqlite3
 import logging
 import httprpc
@@ -178,34 +176,30 @@ async def put(ctx, db, secret, key, version, obj):
     ctx['rpc'] = RPCClient(G.cert, G.cert, G.servers)
 
     res = await get(ctx, db, '#')
-    if res['value'] == hashlib.sha512(secret.encode()).hexdigest():
+    if res['value'] == hashlib.sha512((db+secret).encode()).hexdigest():
         return await paxos_client(ctx['rpc'], db, key, version, obj)
 
     raise Exception('Authentication Failed')
 
 
 # Initialize the db and generate api key
-async def init(ctx, db=None, secret=None):
+async def init(ctx, db, secret, new_secret=None):
     ctx['rpc'] = RPCClient(G.cert, G.cert, G.servers)
 
-    if db and secret:
+    if new_secret:
+        # DB exists. Just change the password
         res = await get(ctx, db, '#')
-    elif not db and not secret:
-        secret = db = str(uuid.uuid4())
-        res = dict(version=0, value=hashlib.sha512(db.encode()).hexdigest())
+        res = await put(
+            ctx, db, secret, '#', res['version'] + 1,
+            hashlib.sha512((db+new_secret).encode()).hexdigest())
     else:
-        raise Exception('DB_OR_SECRET_MISSING')
+        # Request to create the db
+        res = await paxos_client(
+            ctx['rpc'], db, '#', 1,
+            hashlib.sha512((db+secret).encode()).hexdigest())
 
-    if res['value'] == hashlib.sha512(secret.encode()).hexdigest():
-        secret = secrets.token_urlsafe(48)
-
-        res = await paxos_client(ctx['rpc'], db, '#', res['version'] + 1,
-                                 hashlib.sha512(secret.encode()).hexdigest())
-
-        if 'OK' == res['status']:
-            return dict(db=db, secret=secret, version=res['version'])
-
-    raise Exception('Authentication Failed')
+    if 'OK' == res['status']:
+        return dict(db=db, version=res['version'])
 
 
 class RPCClient(httprpc.Client):

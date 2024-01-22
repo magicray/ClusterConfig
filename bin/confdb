@@ -1,34 +1,15 @@
 #!/bin/bash -e
 
-DB=$(grep 'db: ' $1 | tail -n 1 | cut -d' ' -f2)
-SECRET=$(grep 'secret: ' $1 | tail -n 1 | cut -d' ' -f2)
-SERVER=$(grep 'server: ' $1 | tail -n 1 | cut -d' ' -f2)
-
-if [ $2 == 'init' ]; then
-    TMP=.clusterstate.tmp.$(uuid)
-    curl -sk --compressed https:/$SERVER/init/db/$DB/secret/$SECRET > $TMP
-
-    SECRET=$(grep '"secret": ' $TMP | cut -d'"' -f4)
-    VERSION=$(grep '"version": ' $TMP | cut -d':' -f2 | cut -d, -f1)
-
-    if [ $VERSION ] && [ $SECRET ]; then
-        if [ ! $DB ]; then
-            DB=$(grep '"db": ' $TMP | cut -d'"' -f4)
-            echo db: $DB | tee -a $1
-        fi
-        echo version: $VERSION | tee -a $1
-        echo secret: $SECRET | tee -a $1
-    fi
-
-    rm $TMP
-elif [ $2 == 'put' ]; then
+if [ 'put' == $1 ]; then
     cat - | gzip - | curl -k --compressed                               \
-        https:/$SERVER/put/db/$DB/secret/$SECRET/key/$3/version/$4      \
+        https:/$SERVER/put/db/$DB/secret/$SECRET/key/$2/version/$3      \
         -H 'Content-Type: application/json' -H 'Content-Encoding: gzip' \
         --data-binary @-
-elif [ $2 == 'get' ]; then
-    curl -k --compressed https:/$SERVER/get/db/$DB/key/$3
+elif [ 'get' == $1 ]; then
+    curl -k --compressed https:/$SERVER/get/db/$DB/key/$2
+elif [ 'init' == $1 ]; then
+    curl -sk --compressed https:/$SERVER/init/db/$DB/secret/$SECRET/new_secret/$2
 else
-    echo 'Wrong command - Use init/put/get'
+    echo Wrong command
     exit 1
 fi
