@@ -11,7 +11,7 @@ from logging import critical as log
 
 
 async def fetch(ctx, db, key=None):
-    db = os.path.join('confdb', db + '.sqlite3')
+    db = os.path.join('paxosdb', db + '.sqlite3')
     if not os.path.isfile(db):
         raise Exception('NOT_INITIALIZED')
 
@@ -45,8 +45,8 @@ async def paxos_server(ctx, db, key, version, proposal_seq, octets=None):
     if not ctx.get('subject', ''):
         raise Exception('TLS_AUTH_FAILED')
 
-    os.makedirs('confdb', exist_ok=True)
-    db = sqlite3.connect(os.path.join('confdb', db + '.sqlite3'))
+    os.makedirs('paxosdb', exist_ok=True)
+    db = sqlite3.connect(os.path.join('paxosdb', db + '.sqlite3'))
     db.execute('''create table if not exists paxos(
                       key          text,
                       version      int,
