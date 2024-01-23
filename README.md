@@ -1,4 +1,4 @@
-# ConfDB
+# PaxosDB
 Highly Available store for config and state
  * Compare and Swap updates
  * Replicated and Strongly Consistent
