@@ -76,6 +76,7 @@ async def paxos_server(ctx, db, key, version, proposal_seq, octets=None):
                            ''', [proposal_seq, key, version])
                 db.commit()
 
+                # CRUX of the paxos protocol - return the accepted value
                 return dict(accepted_seq=accepted_seq, value=value)
         else:
             # Paxos ACCEPT - Client has sent the most recent value from the
@@ -90,7 +91,8 @@ async def paxos_server(ctx, db, key, version, proposal_seq, octets=None):
                        where key=? and version=?
                     ''', [proposal_seq, proposal_seq, octets, key, version])
 
-                # Delete older versions of the value
+                # Delete older values of this key.
+                # This is unrelated to and does not impact Paxos steps.
                 db.execute(
                     '''delete from paxos where key=? and version < (
                            select max(version) from paxos
@@ -105,7 +107,6 @@ async def paxos_server(ctx, db, key, version, proposal_seq, octets=None):
     raise Exception(f'STALE_PROPOSAL_SEQ {key}:{version} {proposal_seq}')
 
 
-# PROPOSE - Drives the paxos protocol
 async def paxos_client(rpc, db, key, version, obj=b''):
     seq = int(time.time())  # Current timestamp is a good enough seq
     url = f'db/{db}/key/{key}/version/{version}/proposal_seq/{seq}'
@@ -113,17 +114,17 @@ async def paxos_client(rpc, db, key, version, obj=b''):
 
     if obj != b'':
         # value to be set should always be json serializable
-        obj = value = gzip.compress(json.dumps(obj).encode())
+        octets = gzip.compress(json.dumps(obj).encode())
 
     # Paxos PROMISE phase - block stale writers
     accepted_seq = 0
     for v in await rpc.quorum_invoke(f'promise/{url}'):
         # CRUX of the paxos protocol - Find the most recent accepted value
         if v['accepted_seq'] > accepted_seq:
-            accepted_seq, value = v['accepted_seq'], v['value']
+            accepted_seq, octets = v['accepted_seq'], v['value']
 
     # Paxos ACCEPT phase - propose the value found above
-    await rpc.quorum_invoke(f'accept/{url}', value)
+    await rpc.quorum_invoke(f'accept/{url}', octets)
 
 
 async def get(ctx, db, key=None):
@@ -162,9 +163,14 @@ async def put(ctx, db, secret, key, version, obj):
 
     res = await get(ctx, db, '#')
     if res['value'] == get_hmac(secret, db):
+        # Update and return the most recent version. Most recent version could
+        # be higher than what we requested if there was a newer request before
+        # this completed. Even if the version is same, it could be a different
+        # value set by another parallel request.
+        #
+        # Paxos guarantees that the value for the returned version is now
+        # final and would not change under any condition.
         await paxos_client(ctx['rpc'], db, key, version, obj)
-
-        # Return the most recent version
         return await get(ctx, db, key)
 
     raise Exception('Authentication Failed')
@@ -176,13 +182,17 @@ async def init(ctx, db, secret, new_secret=None):
 
     if new_secret:
         # DB exists. Just change the password
+        obj = get_hmac(new_secret, db)
         res = await get(ctx, db, '#')
-        return await put(ctx, db, secret, '#', res['version'] + 1,
-                         get_hmac(new_secret, db))
+        res = await put(ctx, db, secret, '#', res['version'] + 1, obj)
     else:
-        # Request to create the db
-        await paxos_client(ctx['rpc'], db, '#', 0, get_hmac(secret, db))
-        return await get(ctx, db, '#')
+        # Create a new db
+        obj = get_hmac(secret, db)
+        res = await paxos_client(ctx['rpc'], db, '#', 0, obj)
+        res = await get(ctx, db, '#')
+
+    return dict(db=db, version=res['version'],
+                status='OK' if obj == res['value'] else 'CONFLICT')
 
 
 class RPCClient(httprpc.Client):
