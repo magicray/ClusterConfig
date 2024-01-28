@@ -27,12 +27,10 @@ async def fetch(ctx, db, key=None):
                               ''').fetchall()
         else:
             # Most recent version of this key
-            # Ideally, there would be either 0 or 1 rows
-            return db.execute(
-                '''select version, value from paxos
-                   where key=? and accepted_seq > 0
-                   order by version desc limit 1
-                ''', [key]).fetchone()
+            return db.execute('''select version, value from paxos
+                                 where key=? and accepted_seq > 0
+                                 order by version desc limit 1
+                              ''', [key]).fetchone()
     finally:
         db.close()
 
@@ -50,15 +48,16 @@ async def paxos_server(ctx, db, key, version, proposal_seq, octets=None):
 
     os.makedirs('paxosdb', exist_ok=True)
     db = sqlite3.connect(os.path.join('paxosdb', db + '.sqlite3'))
-    db.execute('''create table if not exists paxos(
-                      key          text,
-                      version      int,
-                      promised_seq int,
-                      accepted_seq int,
-                      value        blob,
-                      primary key(key, version)
-                  )''')
     try:
+        db.execute('''create table if not exists paxos(
+                          key          text,
+                          version      int,
+                          promised_seq int,
+                          accepted_seq int,
+                          value        blob,
+                          primary key(key, version)
+                      )''')
+
         db.execute('insert or ignore into paxos values(?,?,0,0,null)',
                    [key, version])
 
@@ -98,14 +97,7 @@ async def paxos_server(ctx, db, key, version, proposal_seq, octets=None):
                            where key=? and accepted_seq > 0)
                     ''', [key, key])
 
-                row = db.execute(
-                    '''select version, accepted_seq, value from paxos
-                       where key=? and accepted_seq > 0
-                       order by version desc limit 1
-                    ''', [key]).fetchone()
-                db.commit()
-
-                return row
+                return db.commit()
     finally:
         db.rollback()
         db.close()
@@ -131,21 +123,7 @@ async def paxos_client(rpc, db, key, version, obj=b''):
             accepted_seq, value = v['accepted_seq'], v['value']
 
     # Paxos ACCEPT phase - propose the value found above
-    vlist = await rpc.quorum_invoke(f'accept/{url}', value)
-    result = dict(db=db, key=key, status='CONFLICT')
-
-    # All nodes returned the same row
-    if all([vlist[0] == v for v in vlist]):
-        result['value'] = json.loads(gzip.decompress(vlist[0][2]).decode())
-        result['version'] = vlist[0][0]
-
-        # Accept was successful and our value was proposed
-        # If this was not true, then we proposed value from a previous round
-        # and the status would still be conflict
-        if 0 == accepted_seq and version == vlist[0][0] and obj == vlist[0][2]:
-            result['status'] = 'OK'
-
-    return result
+    await rpc.quorum_invoke(f'accept/{url}', value)
 
 
 async def get(ctx, db, key=None):
@@ -171,8 +149,8 @@ async def get(ctx, db, key=None):
                     db=db, key=key, version=vlist[0][0],
                     value=json.loads(gzip.decompress(vlist[0][1]).decode()))
 
-            max_version = max([v[0] for v in vlist if v[0] is not None])
-            await paxos_client(rpc, db, key, max_version)
+            version = max([v[0] for v in vlist if v and v[0] is not None])
+            await paxos_client(rpc, db, key, version)
 
 
 def get_hmac(secret, msg):
@@ -184,7 +162,10 @@ async def put(ctx, db, secret, key, version, obj):
 
     res = await get(ctx, db, '#')
     if res['value'] == get_hmac(secret, db):
-        return await paxos_client(ctx['rpc'], db, key, version, obj)
+        await paxos_client(ctx['rpc'], db, key, version, obj)
+
+        # Return the most recent version
+        return await get(ctx, db, key)
 
     raise Exception('Authentication Failed')
 
@@ -196,14 +177,12 @@ async def init(ctx, db, secret, new_secret=None):
     if new_secret:
         # DB exists. Just change the password
         res = await get(ctx, db, '#')
-        res = await put(ctx, db, secret, '#', res['version'] + 1,
-                        get_hmac(secret, db))
+        return await put(ctx, db, secret, '#', res['version'] + 1,
+                         get_hmac(new_secret, db))
     else:
         # Request to create the db
-        res = await paxos_client(ctx['rpc'], db, '#', 1, get_hmac(secret, db))
-
-    if 'OK' == res['status']:
-        return dict(db=db, version=res['version'])
+        await paxos_client(ctx['rpc'], db, '#', 0, get_hmac(secret, db))
+        return await get(ctx, db, '#')
 
 
 class RPCClient(httprpc.Client):
@@ -245,10 +224,10 @@ if '__main__' == __name__:
                                  promise=paxos_server, accept=paxos_server),
                     cacert=G.cert, cert=G.cert)
     elif G.db and G.key and G.version is not None:
-        print(json.dumps(asyncio.run(paxos_client(
-                                         RPCClient(G.cert, G.cert, G.servers),
-                                         G.db, G.key, G.version,
-                                         json.loads(sys.stdin.read()))),
+        asyncio.run(paxos_client(RPCClient(G.cert, G.cert, G.servers),
+                                 G.db, G.key, G.version,
+                                 json.loads(sys.stdin.read())))
+        print(json.dumps(asyncio.run(get(dict(), G.db, G.key)),
                          sort_keys=True, indent=4))
     elif G.db:
         print(json.dumps(asyncio.run(get(dict(), G.db, G.key)),
