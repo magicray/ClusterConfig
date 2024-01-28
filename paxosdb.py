@@ -1,7 +1,10 @@
 import os
+import sys
 import gzip
 import time
 import json
+import hmac
+import asyncio
 import sqlite3
 import logging
 import httprpc
@@ -172,11 +175,15 @@ async def get(ctx, db, key=None):
             await paxos_client(rpc, db, key, max_version)
 
 
+def get_hmac(secret, msg):
+    return hmac.new(secret.encode(), msg.encode(), hashlib.sha512).hexdigest()
+
+
 async def put(ctx, db, secret, key, version, obj):
     ctx['rpc'] = RPCClient(G.cert, G.cert, G.servers)
 
     res = await get(ctx, db, '#')
-    if res['value'] == hashlib.sha512((db+secret).encode()).hexdigest():
+    if res['value'] == get_hmac(secret, db):
         return await paxos_client(ctx['rpc'], db, key, version, obj)
 
     raise Exception('Authentication Failed')
@@ -189,14 +196,11 @@ async def init(ctx, db, secret, new_secret=None):
     if new_secret:
         # DB exists. Just change the password
         res = await get(ctx, db, '#')
-        res = await put(
-            ctx, db, secret, '#', res['version'] + 1,
-            hashlib.sha512((db+new_secret).encode()).hexdigest())
+        res = await put(ctx, db, secret, '#', res['version'] + 1,
+                        get_hmac(secret, db))
     else:
         # Request to create the db
-        res = await paxos_client(
-            ctx['rpc'], db, '#', 1,
-            hashlib.sha512((db+secret).encode()).hexdigest())
+        res = await paxos_client(ctx['rpc'], db, '#', 1, get_hmac(secret, db))
 
     if 'OK' == res['status']:
         return dict(db=db, version=res['version'])
@@ -227,12 +231,28 @@ class RPCClient(httprpc.Client):
 if '__main__' == __name__:
     logging.basicConfig(format='%(asctime)s %(process)d : %(message)s')
 
-    G = argparse.ArgumentParser()
-    G.add_argument('--cert', help='certificate path')
-    G.add_argument('--port', help='port number for server')
-    G.add_argument('--servers', help='comma separated list of server ip:port')
-    G = G.parse_args()
+    P = argparse.ArgumentParser()
+    P.add_argument('--cert', help='certificate path')
+    P.add_argument('--port', type=int, help='port number for server')
+    P.add_argument('--servers', help='comma separated list of server ip:port')
+    P.add_argument('--db', help='db for get/put')
+    P.add_argument('--key', help='key for get/put')
+    P.add_argument('--version', type=int, help='version for put')
+    G = P.parse_args()
 
-    httprpc.run(G.port, dict(init=init, get=get, put=put, fetch=fetch,
-                             promise=paxos_server, accept=paxos_server),
-                cacert=G.cert, cert=G.cert)
+    if G.port:
+        httprpc.run(G.port, dict(init=init, get=get, put=put, fetch=fetch,
+                                 promise=paxos_server, accept=paxos_server),
+                    cacert=G.cert, cert=G.cert)
+    elif G.db and G.key and G.version:
+        print(json.dumps(asyncio.run(paxos_client(
+                                         RPCClient(G.cert, G.cert, G.servers),
+                                         G.db, G.key, G.version,
+                                         json.loads(sys.stdin.read()))),
+                         sort_keys=True, indent=4))
+    elif G.db:
+        print(json.dumps(asyncio.run(get(dict(), G.db, G.key)),
+                         sort_keys=True, indent=4))
+    else:
+        P.print_help()
+        exit(1)
