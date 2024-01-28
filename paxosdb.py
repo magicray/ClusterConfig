@@ -244,7 +244,7 @@ if '__main__' == __name__:
         httprpc.run(G.port, dict(init=init, get=get, put=put, fetch=fetch,
                                  promise=paxos_server, accept=paxos_server),
                     cacert=G.cert, cert=G.cert)
-    elif G.db and G.key and G.version:
+    elif G.db and G.key and G.version is not None:
         print(json.dumps(asyncio.run(paxos_client(
                                          RPCClient(G.cert, G.cert, G.servers),
                                          G.db, G.key, G.version,
