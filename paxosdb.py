@@ -4,6 +4,7 @@ import gzip
 import time
 import json
 import hmac
+import uuid
 import asyncio
 import sqlite3
 import logging
@@ -14,7 +15,8 @@ from logging import critical as log
 
 
 async def fetch(ctx, db, key=None):
-    db = os.path.join('paxosdb', db + '.sqlite3')
+    db = hashlib.sha256(db.encode()).hexdigest()
+    db = os.path.join('paxosdb', db[0:3], db[3:6], db + '.sqlite3')
     if not os.path.isfile(db):
         raise Exception('NOT_INITIALIZED')
 
@@ -46,8 +48,10 @@ async def paxos_server(ctx, db, key, version, proposal_seq, octets=None):
     if not ctx.get('subject', ''):
         raise Exception('TLS_AUTH_FAILED')
 
-    os.makedirs('paxosdb', exist_ok=True)
-    db = sqlite3.connect(os.path.join('paxosdb', db + '.sqlite3'))
+    db = hashlib.sha256(db.encode()).hexdigest()
+    db = os.path.join('paxosdb', db[0:3], db[3:6], db + '.sqlite3')
+    os.makedirs(os.path.dirname(db), exist_ok=True)
+    db = sqlite3.connect(db)
     try:
         db.execute('''create table if not exists paxos(
                           key          text,
@@ -110,7 +114,6 @@ async def paxos_server(ctx, db, key, version, proposal_seq, octets=None):
 async def paxos_client(rpc, db, key, version, obj=b''):
     seq = int(time.time())  # Current timestamp is a good enough seq
     url = f'db/{db}/key/{key}/version/{version}/proposal_seq/{seq}'
-    version = int(version)
 
     if obj != b'':
         # value to be set should always be json serializable
@@ -155,14 +158,14 @@ async def get(ctx, db, key=None):
 
 
 def get_hmac(secret, msg):
-    return hmac.new(secret.encode(), msg.encode(), hashlib.sha512).hexdigest()
+    return hmac.new(secret.encode(), msg.encode(), hashlib.sha256).hexdigest()
 
 
 async def put(ctx, db, secret, key, version, obj):
     ctx['rpc'] = RPCClient(G.cert, G.cert, G.servers)
 
     res = await get(ctx, db, '#')
-    if res['value'] == get_hmac(secret, db):
+    if res['value']['hmac'] == get_hmac(secret, res['value']['salt']):
         # Update and return the most recent version. Most recent version could
         # be higher than what we requested if there was a newer request before
         # this completed. Even if the version is same, it could be a different
@@ -180,14 +183,19 @@ async def put(ctx, db, secret, key, version, obj):
 async def init(ctx, db, secret, new_secret=None):
     ctx['rpc'] = RPCClient(G.cert, G.cert, G.servers)
 
+    # DB exists. Just change the password
     if new_secret:
-        # DB exists. Just change the password
-        obj = get_hmac(new_secret, db)
+        obj = dict(db=db, salt=str(uuid.uuid4()))
+        obj['hmac'] = get_hmac(new_secret, obj['salt'])
+
         res = await get(ctx, db, '#')
         res = await put(ctx, db, secret, '#', res['version'] + 1, obj)
+
+    # Create a new db
     else:
-        # Create a new db
-        obj = get_hmac(secret, db)
+        obj = dict(db=db, salt=str(uuid.uuid4()))
+        obj['hmac'] = get_hmac(secret, obj['salt'])
+
         res = await paxos_client(ctx['rpc'], db, '#', 0, obj)
         res = await get(ctx, db, '#')
 
@@ -198,6 +206,7 @@ async def init(ctx, db, secret, new_secret=None):
 class RPCClient(httprpc.Client):
     def __init__(self, cacert, cert, servers):
         super().__init__(cacert, cert, servers)
+        self.quorum = max(self.quorum, G.quorum)
 
     async def quorum_invoke(self, resource, octets=b''):
         res = await self.cluster(resource, octets)
@@ -223,6 +232,7 @@ if '__main__' == __name__:
     P = argparse.ArgumentParser()
     P.add_argument('--cert', help='certificate path')
     P.add_argument('--port', type=int, help='port number for server')
+    P.add_argument('--quorum', type=int, default=0, help='quorum override')
     P.add_argument('--servers', help='comma separated list of server ip:port')
     P.add_argument('--db', help='db for get/put')
     P.add_argument('--key', help='key for get/put')
