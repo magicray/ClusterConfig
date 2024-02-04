@@ -14,9 +14,13 @@ import argparse
 from logging import critical as log
 
 
-async def fetch(ctx, db, key=None):
+def get_db_path(db):
     db = hashlib.sha256(db.encode()).hexdigest()
-    db = os.path.join('paxosdb', db[0:3], db[3:6], db + '.sqlite3')
+    return os.path.join('paxosdb', db[0:3], db[3:6], db + '.sqlite3')
+
+
+async def fetch(ctx, db, key=None):
+    db = get_db_path(db)
     if not os.path.isfile(db):
         raise Exception('NOT_INITIALIZED')
 
@@ -48,8 +52,7 @@ async def paxos_server(ctx, db, key, version, proposal_seq, octets=None):
     if not ctx.get('subject', ''):
         raise Exception('TLS_AUTH_FAILED')
 
-    db = hashlib.sha256(db.encode()).hexdigest()
-    db = os.path.join('paxosdb', db[0:3], db[3:6], db + '.sqlite3')
+    db = get_db_path(db)
     os.makedirs(os.path.dirname(db), exist_ok=True)
     db = sqlite3.connect(db)
     try:
@@ -183,19 +186,17 @@ async def put(ctx, db, secret, key, version, obj):
 async def init(ctx, db, secret, new_secret=None):
     ctx['rpc'] = RPCClient(G.cert, G.cert, G.servers)
 
+    salt = str(uuid.uuid4())
+
     # DB exists. Just change the password
     if new_secret:
-        obj = dict(db=db, salt=str(uuid.uuid4()))
-        obj['hmac'] = get_hmac(new_secret, obj['salt'])
-
+        obj = dict(db=db, salt=salt, hmac=get_hmac(new_secret, salt))
         res = await get(ctx, db, '#')
         res = await put(ctx, db, secret, '#', res['version'] + 1, obj)
 
     # Create a new db
     else:
-        obj = dict(db=db, salt=str(uuid.uuid4()))
-        obj['hmac'] = get_hmac(secret, obj['salt'])
-
+        obj = dict(db=db, salt=salt, hmac=get_hmac(secret, salt))
         res = await paxos_client(ctx['rpc'], db, '#', 0, obj)
         res = await get(ctx, db, '#')
 
@@ -239,17 +240,15 @@ if '__main__' == __name__:
     P.add_argument('--version', type=int, help='version for put')
     G = P.parse_args()
 
-    if G.port:
+    if G.port and G.cert and G.servers:
         httprpc.run(G.port, dict(init=init, get=get, put=put, fetch=fetch,
                                  promise=paxos_server, accept=paxos_server),
                     cacert=G.cert, cert=G.cert)
-    elif G.db and G.key and G.version is not None:
-        asyncio.run(paxos_client(RPCClient(G.cert, G.cert, G.servers),
-                                 G.db, G.key, G.version,
-                                 json.loads(sys.stdin.read())))
-        print(json.dumps(asyncio.run(get(dict(), G.db, G.key)),
-                         sort_keys=True, indent=4))
-    elif G.db:
+    elif G.db and G.cert and G.servers:
+        if G.key and G.version is not None:
+            asyncio.run(paxos_client(RPCClient(G.cert, G.cert, G.servers),
+                                     G.db, G.key, G.version,
+                                     json.loads(sys.stdin.read())))
         print(json.dumps(asyncio.run(get(dict(), G.db, G.key)),
                          sort_keys=True, indent=4))
     else:
