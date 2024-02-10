@@ -231,11 +231,11 @@ if '__main__' == __name__:
     P.add_argument('--version', type=int, help='version for put')
     G = P.parse_args()
 
-    if G.port and G.cert and G.servers:
+    if G.port and G.cert and G.servers and G.db is None:
         httprpc.run(G.port, dict(get=get, put=put, read_server=read_server,
                                  promise=paxos_server, accept=paxos_server),
                     cacert=G.cert, cert=G.cert)
-    elif G.db and G.cert and G.servers:
+    elif G.db and G.cert and G.servers and G.port is None:
         if G.key and G.version is not None:
             asyncio.run(paxos_client(RPCClient(G.cert, G.cert, G.servers),
                                      G.db, G.key, G.version,
