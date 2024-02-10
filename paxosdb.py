@@ -14,13 +14,13 @@ import argparse
 from logging import critical as log
 
 
-def get_db_path(db):
+def path(db, create=False):
     db = hashlib.sha256(db.encode()).hexdigest()
     return os.path.join('paxosdb', db[0:3], db[3:6], db + '.sqlite3')
 
 
-async def fetch(ctx, db, key=None):
-    db = get_db_path(db)
+async def read_server(ctx, db, key=None):
+    db = path(db)
     if not os.path.isfile(db):
         raise Exception('NOT_INITIALIZED')
 
@@ -52,8 +52,9 @@ async def paxos_server(ctx, db, key, version, proposal_seq, octets=None):
     if not ctx.get('subject', ''):
         raise Exception('TLS_AUTH_FAILED')
 
-    db = get_db_path(db)
+    db = path(db)
     os.makedirs(os.path.dirname(db), exist_ok=True)
+
     db = sqlite3.connect(db)
     try:
         db.execute('''create table if not exists paxos(
@@ -138,7 +139,7 @@ async def get(ctx, db, key=None):
 
     if key is None:
         keys = dict()
-        for values in await rpc.quorum_invoke(f'fetch/db/{db}'):
+        for values in await rpc.quorum_invoke(f'read_server/db/{db}'):
             for key, version in values:
                 if key not in keys or version > keys[key]:
                     keys[key] = version
@@ -146,7 +147,7 @@ async def get(ctx, db, key=None):
         return dict(db=db, keys=keys)
     else:
         for i in range(rpc.quorum):
-            vlist = await rpc.quorum_invoke(f'fetch/db/{db}/key/{key}')
+            vlist = await rpc.quorum_invoke(f'read_server/db/{db}/key/{key}')
 
             if all([vlist[0] == v for v in vlist]):
                 if vlist[0] is None:
@@ -167,8 +168,20 @@ def get_hmac(secret, msg):
 async def put(ctx, db, secret, key, version, obj):
     ctx['rpc'] = RPCClient(G.cert, G.cert, G.servers)
 
-    res = await get(ctx, db, '#')
-    if res['value']['hmac'] == get_hmac(secret, res['value']['salt']):
+    try:
+        res = await get(ctx, db, db)
+    except Exception:
+        guid = str(uuid.uuid4())
+        await paxos_client(
+            ctx['rpc'], db, db, 0,
+            dict(guid=guid, hmac=get_hmac(secret, guid)))
+        res = await get(ctx, db, db)
+
+    if db == key:
+        guid = str(uuid.uuid4())
+        obj = dict(guid=guid, hmac=get_hmac(obj, guid))
+
+    if res['value']['hmac'] == get_hmac(secret, res['value']['guid']):
         # Update and return the most recent version. Most recent version could
         # be higher than what we requested if there was a newer request before
         # this completed. Even if the version is same, it could be a different
@@ -180,28 +193,6 @@ async def put(ctx, db, secret, key, version, obj):
         return await get(ctx, db, key)
 
     raise Exception('Authentication Failed')
-
-
-# Initialize the db and generate api key
-async def init(ctx, db, secret, new_secret=None):
-    ctx['rpc'] = RPCClient(G.cert, G.cert, G.servers)
-
-    salt = str(uuid.uuid4())
-
-    # DB exists. Just change the password
-    if new_secret:
-        obj = dict(db=db, salt=salt, hmac=get_hmac(new_secret, salt))
-        res = await get(ctx, db, '#')
-        res = await put(ctx, db, secret, '#', res['version'] + 1, obj)
-
-    # Create a new db
-    else:
-        obj = dict(db=db, salt=salt, hmac=get_hmac(secret, salt))
-        res = await paxos_client(ctx['rpc'], db, '#', 0, obj)
-        res = await get(ctx, db, '#')
-
-    return dict(db=db, version=res['version'],
-                status='OK' if obj == res['value'] else 'CONFLICT')
 
 
 class RPCClient(httprpc.Client):
@@ -241,7 +232,7 @@ if '__main__' == __name__:
     G = P.parse_args()
 
     if G.port and G.cert and G.servers:
-        httprpc.run(G.port, dict(init=init, get=get, put=put, fetch=fetch,
+        httprpc.run(G.port, dict(get=get, put=put, read_server=read_server,
                                  promise=paxos_server, accept=paxos_server),
                     cacert=G.cert, cert=G.cert)
     elif G.db and G.cert and G.servers:

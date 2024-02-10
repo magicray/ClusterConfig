@@ -1,15 +1,10 @@
 #!/bin/bash -e
 
-if [ 'put' == $1 ]; then
+if [ ! -z $2 ]; then
     cat - | gzip - | curl -k --compressed                               \
-        https:/$SERVER/put/db/$DB/secret/$SECRET/key/$2/version/$3      \
+        https:/$SERVER/put/db/$DB/secret/$SECRET/key/$1/version/$2      \
         -H 'Content-Type: application/json' -H 'Content-Encoding: gzip' \
         --data-binary @-
-elif [ 'get' == $1 ]; then
-    curl -k --compressed https:/$SERVER/get/db/$DB/key/$2
-elif [ 'init' == $1 ]; then
-    curl -sk --compressed https:/$SERVER/init/db/$DB/secret/$SECRET/new_secret/$2
 else
-    echo Wrong command
-    exit 1
+    curl -k --compressed https:/$SERVER/get/db/$DB/key/$1
 fi
