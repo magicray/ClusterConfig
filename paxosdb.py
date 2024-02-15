@@ -117,26 +117,29 @@ async def paxos_server(ctx, db, key, version, proposal_seq, octets=None):
 
 async def paxos_client(rpc, db, key, version, obj=b''):
     seq = int(time.time())  # Current timestamp is a good enough seq
-    url = f'db/{db}/key/{key}/version/{version}/proposal_seq/{seq}'
+    url = f'paxos/db/{db}/key/{key}/version/{version}/proposal_seq/{seq}'
 
     if obj != b'':
         # value to be set should always be json serializable
         octets = gzip.compress(json.dumps(obj).encode())
 
-    # Paxos PROMISE phase - block stale writers
+    # Paxos PROMISE phase - block stale writers and finalize the proposal
     accepted_seq = 0
-    for v in await rpc.quorum_invoke(f'promise/{url}'):
+    for v in await rpc.quorum_invoke(url):
         # CRUX of the paxos protocol - Find the most recent accepted value
         if v['accepted_seq'] > accepted_seq:
             accepted_seq, octets = v['accepted_seq'], v['value']
 
     # Paxos ACCEPT phase - propose the value found above
-    await rpc.quorum_invoke(f'accept/{url}', octets)
+    # This may fail but we don't check the return value as we can take
+    # any corrective action. Entire process must be retried.
+    await rpc.quorum_invoke(url, octets)
 
 
 async def get(ctx, db, key=None):
     rpc = ctx.get('rpc', RPCClient(G.cert, G.cert, G.servers))
 
+    # Return the merged and deduplicated list of keys from all the nodes
     if key is None:
         keys = dict()
         for values in await rpc.quorum_invoke(f'read_server/db/{db}'):
@@ -145,20 +148,24 @@ async def get(ctx, db, key=None):
                     keys[key] = version
 
         return dict(db=db, keys=keys)
-    else:
-        for i in range(rpc.quorum):
-            vlist = await rpc.quorum_invoke(f'read_server/db/{db}/key/{key}')
 
-            if all([vlist[0] == v for v in vlist]):
-                if vlist[0] is None:
-                    return dict(db=db, key=key, version=None)
+    # Verify if the value for a key-version has been finalized
+    for i in range(rpc.quorum):
+        vlist = await rpc.quorum_invoke(f'read_server/db/{db}/key/{key}')
 
-                return dict(
-                    db=db, key=key, version=vlist[0][0],
-                    value=json.loads(gzip.decompress(vlist[0][1]).decode()))
+        # version,value pair returned by all the nodes must be same
+        if all([vlist[0] == v for v in vlist]):
+            if vlist[0] is None:
+                return dict(db=db, key=key, version=None)
 
-            version = max([v[0] for v in vlist if v and v[0] is not None])
-            await paxos_client(rpc, db, key, version)
+            return dict(
+                db=db, key=key, version=vlist[0][0],
+                value=json.loads(gzip.decompress(vlist[0][1]).decode()))
+
+        # All the nodes do not agree on a version-value for this key yet.
+        # Start a paxos round to build the consensus on the highest version
+        version = max([v[0] for v in vlist if v and v[0] is not None])
+        await paxos_client(rpc, db, key, version)
 
 
 def get_hmac(secret, msg):
@@ -233,7 +240,7 @@ if '__main__' == __name__:
 
     if G.port and G.cert and G.servers and G.db is None:
         httprpc.run(G.port, dict(get=get, put=put, read_server=read_server,
-                                 promise=paxos_server, accept=paxos_server),
+                                 paxos=paxos_server),
                     cacert=G.cert, cert=G.cert)
     elif G.db and G.cert and G.servers and G.port is None:
         if G.key and G.version is not None:
