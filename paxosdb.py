@@ -131,7 +131,7 @@ async def paxos_client(rpc, db, key, version, obj=b''):
             accepted_seq, octets = v['accepted_seq'], v['value']
 
     # Paxos ACCEPT phase - propose the value found above
-    # This may fail but we don't check the return value as we can take
+    # This may fail but we don't check the return value as we can't take
     # any corrective action. Entire process must be retried.
     await rpc.quorum_invoke(url, octets)
 
