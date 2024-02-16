@@ -45,7 +45,8 @@ async def paxos_server(ctx, db, key, version, proposal_seq, octets=None):
     version = int(version)
     proposal_seq = int(proposal_seq)
 
-    if time.time() > proposal_seq + 10 or time.time() < proposal_seq - 10:
+    proposal_time = proposal_seq / (10**9)
+    if time.time() > proposal_time + 10 or time.time() < proposal_time - 10:
         # For liveness - out of sync clocks can block further rounds
         raise Exception('CLOCKS_OUT_OF_SYNC')
 
@@ -116,7 +117,7 @@ async def paxos_server(ctx, db, key, version, proposal_seq, octets=None):
 
 
 async def paxos_client(rpc, db, key, version, obj=b''):
-    seq = int(time.time())  # Current timestamp is a good enough seq
+    seq = int(time.time()*10**9)  # Current microsecond is a good enough seq
     url = f'paxos/db/{db}/key/{key}/version/{version}/proposal_seq/{seq}'
 
     if obj != b'':
