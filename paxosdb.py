@@ -105,12 +105,12 @@ async def paxos_server(ctx, db, key, version, seq, retain=None, octets=None):
                     ''', [seq, seq, octets, key, version])
 
                 # This is unrelated to and does not impact Paxos steps.
-                if retain is not None:
+                if retain is not None and int(retain) > -1:
                     # Delete older version of this key.
                     db.execute('''delete from paxos where key=? and version < (
                                       select max(version) from paxos
                                       where key=? and accepted_seq > 0) - ?
-                               ''', [key, key, abs(int(retain))])
+                               ''', [key, key, int(retain)])
 
                 return db.commit()
     finally:
@@ -170,6 +170,7 @@ class Client():
 
     async def get(self, db, key=None, version=None):
         url = f'read_server/db/{db}'
+        version = int(version) if version is not None else None
 
         # Return the merged and deduplicated list of keys from all the nodes
         if key is None:
@@ -226,8 +227,8 @@ class Client():
             res = await self.get(db, db)
         except Exception:
             guid = str(uuid.uuid4())
-            obj = dict(guid=guid, hmac=self.hmac(secret, guid))
-            await self.paxos_propose(db, db, 0, obj, 0)
+            auth = dict(guid=guid, hmac=self.hmac(secret, guid))
+            await self.paxos_propose(db, db, 0, auth, 0)
             res = await self.get(db, db)
 
         if db == key:
@@ -249,9 +250,9 @@ async def get_server(ctx, db, key=None, version=None):
     return await Client(G.cert, G.cert, G.servers).get(db, key, version)
 
 
-async def put_server(ctx, db, secret, key, version, obj):
+async def put_server(ctx, db, secret, key, version, obj, retain=None):
     return await Client(G.cert, G.cert, G.servers).put(
-        db, secret, key, version, G.retain, obj)
+        db, secret, key, version, retain, obj)
 
 
 if '__main__' == __name__:
@@ -269,15 +270,23 @@ if '__main__' == __name__:
     G = P.parse_args()
 
     if G.port and G.cert and G.servers and G.db is None:
+        # Start the server
         httprpc.run(G.port, dict(get=get_server, put=put_server,
                                  read_server=read_server, paxos=paxos_server),
                     cacert=G.cert, cert=G.cert)
-    elif G.db and G.cert and G.servers and G.port is None:
+
+    elif G.db and G.key and G.cert and G.servers and G.port is None:
         client = Client(G.cert, G.cert, G.servers)
 
-        if G.key and G.version is not None:
-            asyncio.run(client.paxos_propose(G.db, G.key, G.version, G.retain,
-                                             json.loads(sys.stdin.read())))
+        if G.retain is not None:
+            # Write the value for this key, version
+            # Remove older and retain only latest G.retain versions
+            asyncio.run(client.paxos_propose(
+                G.db, G.key, G.version,
+                json.loads(sys.stdin.read())),
+                G.retain)
+
+        # Read the value
         print(json.dumps(asyncio.run(client.get(G.db, G.key, G.version)),
                          sort_keys=True, indent=4))
     else:

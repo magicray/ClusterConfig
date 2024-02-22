@@ -1,10 +1,10 @@
 #!/bin/bash -e
 
-if [ "put" = $1 ]; then
-    cat - | gzip - | curl -k --compressed                               \
-        https:/$SERVER/put/db/$DB/secret/$SECRET/key/$2/version/$3      \
-        -H 'Content-Type: application/json' -H 'Content-Encoding: gzip' \
+if [ ! -z $3 ]; then
+    cat - | gzip - | curl -k --compressed                                    \
+        https:/$SERVER/put/db/$DB/secret/$SECRET/key/$1/version/$2/retain/$3 \
+        -H 'Content-Type: application/json' -H 'Content-Encoding: gzip'      \
         --data-binary @-
-elif [ "get" = $1 ]; then
-    curl -k --compressed https:/$SERVER/get/db/$DB/key/$2/version/$3
+else
+    curl -k --compressed https:/$SERVER/get/db/$DB/key/$1/version/$2
 fi
