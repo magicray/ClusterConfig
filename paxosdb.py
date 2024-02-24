@@ -26,10 +26,9 @@ async def read_server(ctx, db, key=None, version=None):
     db = sqlite3.connect(db)
     try:
         if key is None:
-            # All accepted keys
-            return db.execute('''select key, version from paxos
-                                 where accepted_seq > 0
-                              ''').fetchall()
+            # All keys
+            return db.execute('select distinct key from paxos').fetchall()
+
         elif key is not None and version is None:
             # Most recent version of this key
             return db.execute('''select version, value from paxos
@@ -40,13 +39,14 @@ async def read_server(ctx, db, key=None, version=None):
             # Value of the given key and version
             return db.execute('''select value from paxos
                                  where key=? and version = ?
-                              ''', [key, version]).fetchone()
+                              ''', [key, int(version)]).fetchone()
     finally:
         db.close()
 
 
-async def paxos_server(ctx, db, key, version, seq, retain=None, octets=None):
+async def paxos_server(ctx, db, key, version, seq, retain, octets=None):
     seq = int(seq)
+    retain = int(retain)
     version = int(version)
 
     proposal_time = seq / (10**9)
@@ -56,6 +56,9 @@ async def paxos_server(ctx, db, key, version, seq, retain=None, octets=None):
 
     if not ctx.get('subject', ''):
         raise Exception('TLS_AUTH_FAILED')
+
+    if retain < 0:
+        raise Exception('INVALID_RETAIN_VALUE')
 
     db = path(db)
     os.makedirs(os.path.dirname(db), exist_ok=True)
@@ -99,18 +102,15 @@ async def paxos_server(ctx, db, key, version, seq, retain=None, octets=None):
                 [key, version]).fetchone()[0]
 
             if seq >= promised_seq:
-                db.execute(
-                    '''update paxos set promised_seq=?, accepted_seq=?, value=?
-                       where key=? and version=?
-                    ''', [seq, seq, octets, key, version])
+                db.execute('''update paxos
+                              set promised_seq=?, accepted_seq=?, value=?
+                              where key=? and version=?
+                           ''', [seq, seq, octets, key, version])
 
                 # This is unrelated to and does not impact Paxos steps.
-                if retain is not None and int(retain) > -1:
-                    # Delete older version of this key.
-                    db.execute('''delete from paxos where key=? and version < (
-                                      select max(version) from paxos
-                                      where key=? and accepted_seq > 0) - ?
-                               ''', [key, key, int(retain)])
+                # Delete older version of this key.
+                db.execute('delete from paxos where key=? and version < ?',
+                           [key, version - retain])
 
                 return db.commit()
     finally:
@@ -146,11 +146,9 @@ class Client():
     def __init__(self, cacert, cert, servers):
         self.rpc = RPCClient(cacert, cert, servers)
 
-    async def paxos_propose(self, db, key, version, obj=b'', retain=None):
+    async def paxos_propose(self, db, key, version, retain=0, obj=b''):
         seq = int(time.time()*10**9)  # Current microsecond is a good enough
         url = f'paxos/db/{db}/key/{key}/version/{version}/seq/{seq}'
-        if retain is not None:
-            url = f'{url}/retain/{int(retain)}'
 
         if obj != b'':
             # value to be set should always be json serializable
@@ -158,7 +156,7 @@ class Client():
 
         # Paxos PROMISE phase - block stale writers and finalize the proposal
         accepted_seq = 0
-        for v in await self.rpc(url):
+        for v in await self.rpc(f'{url}/retain/{retain}'):
             # CRUX of the paxos protocol - Find the most recent accepted value
             if v['accepted_seq'] > accepted_seq:
                 accepted_seq, octets = v['accepted_seq'], v['value']
@@ -166,7 +164,7 @@ class Client():
         # Paxos ACCEPT phase - propose the value found above
         # This may fail but we don't check the return value as we can't take
         # any corrective action. Entire process must be retried.
-        await self.rpc(url, octets)
+        await self.rpc(f'{url}/retain/{retain}', octets)
 
     async def get(self, db, key=None, version=None):
         url = f'read_server/db/{db}'
@@ -174,13 +172,8 @@ class Client():
 
         # Return the merged and deduplicated list of keys from all the nodes
         if key is None:
-            keys = dict()
-            for values in await self.rpc(url):
-                for key, version in values:
-                    if key not in keys or version > keys[key]:
-                        keys[key] = version
-
-            return dict(db=db, keys=keys)
+            keys = [k for i in await self.rpc(url) for j in i for k in j]
+            return dict(db=db, keys=sorted(set(keys)))
 
         elif key is not None and version is None:
             # Verify if the value for a key-version has been finalized
@@ -200,7 +193,7 @@ class Client():
                 # yet. Start a paxos round to build the consensus on the
                 # highest version.
                 version = max([v[0] for v in res if v and v[0] is not None])
-                await self.paxos_propose(db, key, version)
+                await self.paxos_propose(db, key, version, version)
         elif key is not None and version is not None:
             for i in range(self.rpc.quorum):
                 res = await self.rpc(f'{url}/key/{key}/version/{version}')
@@ -217,18 +210,18 @@ class Client():
                 # All the nodes do not agree on a value for this key-version
                 # yet. Start a paxos round to build the consensus on this
                 # key-verison.
-                await self.paxos_propose(db, key, version)
+                await self.paxos_propose(db, key, version, version)
 
     def hmac(self, x, y):
         return hmac.new(x.encode(), y.encode(), hashlib.sha256).hexdigest()
 
-    async def put(self, db, secret, key, version, retain, obj):
+    async def put(self, db, secret, key, version, obj, retain=0):
         try:
             res = await self.get(db, db)
         except Exception:
             guid = str(uuid.uuid4())
             auth = dict(guid=guid, hmac=self.hmac(secret, guid))
-            await self.paxos_propose(db, db, 0, auth, 0)
+            await self.paxos_propose(db, db, 0, 0, auth)
             res = await self.get(db, db)
 
         if db == key:
@@ -237,7 +230,7 @@ class Client():
 
         if res['value']['hmac'] == self.hmac(secret, res['value']['guid']):
             # Run a paxos round to build consensus
-            await self.paxos_propose(db, key, version, obj, retain)
+            await self.paxos_propose(db, key, version, retain, obj)
 
             # Paxos guarantees that the value for the returned version is now
             # final and would not change under any condition.
@@ -250,9 +243,9 @@ async def get_server(ctx, db, key=None, version=None):
     return await Client(G.cert, G.cert, G.servers).get(db, key, version)
 
 
-async def put_server(ctx, db, secret, key, version, obj, retain=None):
+async def put_server(ctx, db, secret, key, version, obj, retain=0):
     return await Client(G.cert, G.cert, G.servers).put(
-        db, secret, key, version, retain, obj)
+        db, secret, key, version, obj, retain)
 
 
 if '__main__' == __name__:
@@ -276,18 +269,15 @@ if '__main__' == __name__:
                     cacert=G.cert, cert=G.cert)
 
     elif G.db and G.key and G.cert and G.servers and G.port is None:
-        client = Client(G.cert, G.cert, G.servers)
-
         if G.retain is not None:
             # Write the value for this key, version
             # Remove older and retain only latest G.retain versions
-            asyncio.run(client.paxos_propose(
-                G.db, G.key, G.version,
-                json.loads(sys.stdin.read())),
-                G.retain)
+            asyncio.run(Client(G.cert, G.cert, G.servers).paxos_propose(
+                G.db, G.key, G.version, G.retain,
+                json.loads(sys.stdin.read())))
 
         # Read the value
-        print(json.dumps(asyncio.run(client.get(G.db, G.key, G.version)),
+        print(json.dumps(asyncio.run(get_server({}, G.db, G.key, G.version)),
                          sort_keys=True, indent=4))
     else:
         P.print_help()

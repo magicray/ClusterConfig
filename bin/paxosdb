@@ -5,6 +5,10 @@ if [ ! -z $3 ]; then
         https:/$SERVER/put/db/$DB/secret/$SECRET/key/$1/version/$2/retain/$3 \
         -H 'Content-Type: application/json' -H 'Content-Encoding: gzip'      \
         --data-binary @-
-else
+elif [ ! -z $2 ]; then
     curl -k --compressed https:/$SERVER/get/db/$DB/key/$1/version/$2
+elif [ ! -z $1 ]; then
+    curl -k --compressed https:/$SERVER/get/db/$DB/key/$1
+else
+    curl -k --compressed https:/$SERVER/get/db/$DB
 fi
