@@ -2,7 +2,7 @@
 
 if [ ! -z $3 ]; then
     cat - | gzip - | curl -k --compressed                                    \
-        https:/$SERVER/put/db/$DB/secret/$SECRET/key/$1/version/$2/retain/$3 \
+        https:/$SERVER/put/db/$DB/secret/$SECRET/key/$1/version/$2/remove/$3 \
         -H 'Content-Type: application/json' -H 'Content-Encoding: gzip'      \
         --data-binary @-
 elif [ ! -z $2 ]; then
