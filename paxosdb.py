@@ -115,32 +115,27 @@ async def paxos_server(ctx, key, version, seq, octets=None):
     raise Exception(f'STALE_PROPOSAL_SEQ {key}:{version} {seq}')
 
 
-class RPCClient(httprpc.Client):
+class Client():
     def __init__(self, cacert, cert, servers):
-        super().__init__(cacert, cert, servers)
+        self.client = httprpc.Client(cacert, cert, servers)
 
-    async def __call__(self, resource, octets=b''):
-        res = await self.cluster(resource, octets)
+    async def rpc(self, resource, octets=b''):
+        res = await self.client.cluster(resource, octets)
         result = list()
 
         exceptions = list()
-        for s, r in zip(self.conns.keys(), res):
+        for s, r in zip(self.client.conns.keys(), res):
             if isinstance(r, Exception):
                 exceptions.append(f'\n-{s}\n{r}')
             else:
                 result.append(r)
 
-        if len(result) < self.quorum:
+        if len(result) < self.client.quorum:
             raise Exception('\n'.join(exceptions))
 
         return result
 
-
-class Client():
-    def __init__(self, cacert, cert, servers):
-        self.rpc = RPCClient(cacert, cert, servers)
-
-    async def paxos_propose(self, key, version, obj=b''):
+    async def paxos_client(self, key, version, obj=b''):
         seq = int(time.time()*10**9)  # Current microsecond is a good enough
         url = f'paxos/key/{key}/version/{version}/seq/{seq}'
 
@@ -161,7 +156,7 @@ class Client():
         await self.rpc(url, octets)
 
     async def get(self, key=None):
-        # Return the merged and deduplicated list of keys from all the nodes
+        # Return the latest version of accepted keys
         if key is None:
             keys = dict()
             for res in await self.rpc('read'):
@@ -172,7 +167,7 @@ class Client():
             return dict(db=res['db'], keys=keys)
 
         # Verify if the value for a key-version has been finalized
-        for i in range(self.rpc.quorum):
+        for i in range(self.client.quorum):
             res = await self.rpc(f'read/key/{key}')
 
             # version,value pair returned by all the nodes must be same
@@ -186,12 +181,12 @@ class Client():
 
             # All the nodes do not agree on a version-value for this key yet.
             # Start a paxos round to build the consensus.
-            ver = [v['version'] for v in res if v and v['version'] is not None]
-            await self.paxos_propose(key, max(ver))
+            versions = [v['version'] for v in res if v['version'] is not None]
+            await self.paxos_client(key, max(versions))
 
     async def put(self, key, version, obj):
         # Run a paxos round to build consensus
-        await self.paxos_propose(key, version, obj)
+        await self.paxos_client(key, version, obj)
 
         # Paxos guarantees that the value for the returned version is now
         # final and would not change under any condition.
@@ -210,28 +205,28 @@ if '__main__' == __name__:
     logging.basicConfig(format='%(asctime)s %(process)d : %(message)s')
 
     P = argparse.ArgumentParser()
+    P.add_argument('--port', type=int, help='port number for server')
     P.add_argument('--cert', help='certificate path')
     P.add_argument('--cacert', help='ca certificate path')
-    P.add_argument('--port', type=int, help='port number for server')
     P.add_argument('--servers', help='comma separated list of server ip:port')
     P.add_argument('--key', help='key for get/put')
     P.add_argument('--version', type=int, help='version for put')
     G = P.parse_args()
 
-    if G.port and G.cacert and G.cert and G.servers:
+    if G.cacert and G.cert and G.port:
         # Start the server
         httprpc.run(G.port, dict(get=get, put=put, read=read,
                                  paxos=paxos_server),
                     cacert=G.cacert, cert=G.cert)
 
-    elif G.cert and G.cacert and G.port is None:
-        # Write the value for a key, version
+    elif G.cacert and G.cert and G.servers and G.port is None:
         if G.version is not None:
+            # Write the value for a key, version
             coro = put({}, G.key, G.version, json.loads(sys.stdin.read()))
 
-        # Read the latest version of a key
         else:
-            coro = get({}, G.key, G.version)
+            # Read the latest version of a key
+            coro = get({}, G.key)
 
         print(json.dumps(asyncio.run(coro), sort_keys=True, indent=4))
     else:
