@@ -1,14 +1,11 @@
 #!/bin/bash -e
 
 if [ ! -z $3 ]; then
-    cat - | gzip - | curl -k --compressed                                    \
-        https:/$SERVER/put/db/$DB/secret/$SECRET/key/$1/version/$2/remove/$3 \
-        -H 'Content-Type: application/json' -H 'Content-Encoding: gzip'      \
+    cat - | gzip - | curl -k --compressed https:/$1/put/key/$2/version/$3 \
+        -H 'Content-Type: application/json' -H 'Content-Encoding: gzip'   \
         --data-binary @-
 elif [ ! -z $2 ]; then
-    curl -k --compressed https:/$SERVER/get/db/$DB/key/$1/version/$2
+    curl -k --compressed https:/$1/get/key/$2
 elif [ ! -z $1 ]; then
-    curl -k --compressed https:/$SERVER/get/db/$DB/key/$1
-else
-    curl -k --compressed https:/$SERVER/get/db/$DB
+    curl -k --compressed https:/$1/get
 fi
