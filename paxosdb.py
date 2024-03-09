@@ -16,7 +16,7 @@ def path(db, create=False):
     return os.path.join('paxosdb', db[0:3], db[3:6], db + '.sqlite3')
 
 
-async def read_server(ctx, key=None):
+async def read(ctx, key=None):
     sub = ctx['subject']
     db = path(sub)
     if not os.path.isfile(db):
@@ -164,7 +164,7 @@ class Client():
         # Return the merged and deduplicated list of keys from all the nodes
         if key is None:
             keys = dict()
-            for res in await self.rpc('read_server'):
+            for res in await self.rpc('read'):
                 for key, version in res['keys']:
                     if key not in keys or version > keys[key]:
                         keys[key] = version
@@ -173,7 +173,7 @@ class Client():
 
         # Verify if the value for a key-version has been finalized
         for i in range(self.rpc.quorum):
-            res = await self.rpc(f'read_server/key/{key}')
+            res = await self.rpc(f'read/key/{key}')
 
             # version,value pair returned by all the nodes must be same
             if all([res[0] == v for v in res]):
@@ -198,11 +198,11 @@ class Client():
         return await self.get(key)
 
 
-async def get_proxy(ctx, key=None):
+async def get(ctx, key=None):
     return await Client(G.cert, G.cert, G.servers).get(key)
 
 
-async def put_proxy(ctx, key, version, obj):
+async def put(ctx, key, version, obj):
     return await Client(G.cert, G.cert, G.servers).put(key, version, obj)
 
 
@@ -220,20 +220,20 @@ if '__main__' == __name__:
 
     if G.port and G.cacert and G.cert and G.servers:
         # Start the server
-        httprpc.run(G.port, dict(get=get_proxy, put=put_proxy,
-                                 read_server=read_server, paxos=paxos_server),
+        httprpc.run(G.port, dict(get=get, put=put, read=read,
+                                 paxos=paxos_server),
                     cacert=G.cacert, cert=G.cert)
 
     elif G.cert and G.cacert and G.port is None:
         # Write the value for a key, version
         if G.version is not None:
-            cor = put_proxy({}, G.key, G.version, json.loads(sys.stdin.read()))
+            coro = put({}, G.key, G.version, json.loads(sys.stdin.read()))
 
         # Read the latest version of a key
         else:
-            cor = get_proxy({}, G.key, G.version)
+            coro = get({}, G.key, G.version)
 
-        print(json.dumps(asyncio.run(cor), sort_keys=True, indent=4))
+        print(json.dumps(asyncio.run(coro), sort_keys=True, indent=4))
     else:
         P.print_help()
         exit(1)
