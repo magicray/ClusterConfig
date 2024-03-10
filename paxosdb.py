@@ -11,35 +11,39 @@ import hashlib
 import argparse
 
 
-def path(db, create=False):
-    db = hashlib.sha256(db.encode()).hexdigest()
-    return os.path.join('paxosdb', db[0:3], db[3:6], db + '.sqlite3')
+def sqlite(cert_subject):
+    digest = hashlib.sha256(cert_subject.encode()).hexdigest()
+    path = os.path.join('paxosdb', digest[0:3], digest + '.sqlite3')
+
+    try:
+        return sqlite3.connect(path)
+    except Exception:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        return sqlite3.connect(path)
 
 
 async def read(ctx, key=None):
-    sub = ctx['subject']
-    db = path(sub)
-    if not os.path.isfile(db):
-        raise Exception('NOT_INITIALIZED')
+    subject = ctx['subject']
 
-    db = sqlite3.connect(db)
+    db = sqlite(subject)
     try:
         if key is None:
             # All keys
-            return dict(db=sub, keys=db.execute(
+            return dict(db=subject, keys=db.execute(
                 '''select key, version from paxos
                    where accepted_seq > 0
                 ''').fetchall())
 
         else:
             # Most recent version of this key
-            result = db.execute('''select version, value from paxos
-                                   where key=? and accepted_seq > 0
-                                   order by version desc limit 1
-                                ''', [key]).fetchone()
-            version, value = result if result else (None, b'')
-            return dict(db=sub, key=key, version=version, value=value)
+            row = db.execute('''select version, value from paxos
+                                where key=? and accepted_seq > 0
+                                order by version desc limit 1
+                             ''', [key]).fetchone()
+            version, value = row if row else (None, b'')
+            return dict(db=subject, key=key, version=version, value=value)
     finally:
+        db.rollback()
         db.close()
 
 
@@ -52,10 +56,7 @@ async def paxos_server(ctx, key, version, seq, octets=None):
         # For liveness - out of sync clocks can block further rounds
         raise Exception('CLOCKS_OUT_OF_SYNC')
 
-    db = path(ctx['subject'])
-    os.makedirs(os.path.dirname(db), exist_ok=True)
-
-    db = sqlite3.connect(db)
+    db = sqlite(ctx['subject'])
     try:
         db.execute('''create table if not exists paxos(
                           key          text,
@@ -71,8 +72,8 @@ async def paxos_server(ctx, key, version, seq, octets=None):
 
         if octets is None:
             # Paxos PROMISE - Block stale writers and return the most recent
-            # accepted value. Client will propose the most recent across
-            # servers in the accept phase
+            # accepted value. Client will propose the most recent value found
+            # across servers in the accept phase
             promised_seq, accepted_seq, value = db.execute(
                 '''select promised_seq, accepted_seq, value
                    from paxos where key=? and version=?
@@ -87,8 +88,8 @@ async def paxos_server(ctx, key, version, seq, octets=None):
                 # CRUX of the paxos protocol - return the accepted value
                 return dict(accepted_seq=accepted_seq, value=value)
         else:
-            # Paxos ACCEPT - Client has sent the most recent value from the
-            # promise phase.
+            # Paxos ACCEPT - Client must send the most recent value found in
+            # the promise phase.
             promised_seq = db.execute(
                 'select promised_seq from paxos where key=? and version=?',
                 [key, version]).fetchone()[0]
@@ -175,6 +176,11 @@ class Client():
                 val = res[0].pop('value')
 
                 if res[0]['version'] is not None:
+                    # This indicates that the paxos round has been successfully
+                    # compelted. This value is now final and can't get
+                    # overwritten by running any number of paxos rounds for
+                    # this key,version. Promise round will return this value
+                    # and it would be sent in the accept round by the proposer.
                     res[0]['value'] = json.loads(gzip.decompress(val).decode())
 
                 return res[0]
@@ -188,8 +194,8 @@ class Client():
         # Run a paxos round to build consensus
         await self.paxos_client(key, version, obj)
 
-        # Paxos guarantees that the value for the returned version is now
-        # final and would not change under any condition.
+        # Paxos guarantees that the value for the returned key, version pair
+        # is final and would not change under any condition.
         return await self.get(key)
 
 
