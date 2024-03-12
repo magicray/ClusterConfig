@@ -23,13 +23,11 @@ def sqlite(cert_subject):
 
 
 async def read(ctx, key=None):
-    subject = ctx['subject']
-
-    db = sqlite(subject)
+    db = sqlite(ctx['subject'])
     try:
         if key is None:
             # All keys
-            return dict(db=subject, keys=db.execute(
+            return dict(db=ctx['subject'], keys=db.execute(
                 '''select key, version from paxos
                    where accepted_seq > 0
                 ''').fetchall())
@@ -40,8 +38,8 @@ async def read(ctx, key=None):
                                 where key=? and accepted_seq > 0
                                 order by version desc limit 1
                              ''', [key]).fetchone()
-            version, value = row if row else (None, b'')
-            return dict(db=subject, key=key, version=version, value=value)
+            ver, val = row if row else (None, b'')
+            return dict(db=ctx['subject'], key=key, version=ver, value=val)
     finally:
         db.rollback()
         db.close()
