@@ -70,6 +70,12 @@ async def paxos_server(ctx, key, version, seq, octets=None):
         db.execute('insert or ignore into paxos values(?,?,0,0,null)',
                    [key, version])
 
+        max_version = db.execute('select max(version) from paxos where key=?',
+                                 [key]).fetchone()[0]
+
+        if version < 1 or version < max_version:
+            raise Exception('INVALID_VERSION')
+
         if octets is None:
             # Paxos PROMISE - Block stale writers and return the most recent
             # accepted value. Client will propose the most recent value found
@@ -102,11 +108,8 @@ async def paxos_server(ctx, key, version, seq, octets=None):
 
                 # Delete older version of this key.
                 # This is unrelated to and does not impact Paxos steps.
-                db.execute('''delete from paxos where key=? and version < (
-                                  select max(version) from paxos
-                                  where key=? and accepted_seq > 0)
-                           ''',
-                           [key, key])
+                db.execute('delete from paxos where key=? and version < ?',
+                           [key, version])
 
                 return db.commit()
     finally:
