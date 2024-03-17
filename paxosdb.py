@@ -71,7 +71,7 @@ async def paxos_server(ctx, key, version, seq, octets=None):
         max_version = db.execute('select max(version) from paxos where key=?',
                                  [key]).fetchone()[0]
 
-        if version < 1 or version < max_version:
+        if version < max(1, max_version):
             raise Exception('INVALID_VERSION')
 
         if octets is None:
@@ -215,7 +215,7 @@ if '__main__' == __name__:
     P.add_argument('--port', type=int, help='port number for server')
     P.add_argument('--cert', help='certificate path')
     P.add_argument('--cacert', help='ca certificate path')
-    P.add_argument('--servers', help='comma separated list of server ip:port')
+    P.add_argument('--servers', help='comma separated list of ip:port')
     P.add_argument('--key', help='key for get/put')
     P.add_argument('--version', type=int, help='version for put')
     G = P.parse_args()
