@@ -9,10 +9,9 @@ KEY_VERSION=$(printf "%s-%014d" $KEY $VERSION)
 PROPOSAL_SEQ=$(date +%Y%m%d%H%M%S)
 
 PAXOS_DIR=paxosdb/$(echo $KEY | md5sum | cut -c -3)
-DEFAULT_FILE=$(printf "%s-%014d-%014d" $KEY_VERSION 0 0)
 KEY_VERSION_PROPOSAL_SEQ=$(printf "%s-%014d" $KEY_VERSION $PROPOSAL_SEQ)
 
-function fetch {
+function read_server {
 cat << BASHSCRIPT | ssh $1 /usr/bin/bash -e
 
 cd $PAXOS_DIR
@@ -25,51 +24,39 @@ BASHSCRIPT
 }
 
 
-function paxos_promise {
+function paxos_server {
 cat << BASHSCRIPT | ssh $1 /usr/bin/bash -e
 
 mkdir -p $PAXOS_DIR && cd $PAXOS_DIR
 touch .lockfile && exec 9>.lockfile && flock -x -n 9
 
-touch $DEFAULT_FILE
-OLDFILE=\$(ls | grep -E "^$KEY_VERSION" | sort | tail -n 1)
-PROMISED_SEQ=\$(echo \$OLDFILE | cut -d- -f3)
+touch \$(printf "%s-%014d-%014d" $KEY_VERSION 0 0)
 
-if [ $PROPOSAL_SEQ -gt \$PROMISED_SEQ ]; then
-    ACCEPTED_SEQ=\$(echo \$OLDFILE | cut -d- -f4)
+OLDFILE=\$(ls | grep -E "^$KEY_VERSION" | sort | tail -n 1)
+
+PROMISED_SEQ=\$(echo \$OLDFILE | cut -d- -f3)
+ACCEPTED_SEQ=\$(echo \$OLDFILE | cut -d- -f4)
+
+# PAXOS - Promise Phase
+if [ ! $2 ] && [ $PROPOSAL_SEQ -gt \$PROMISED_SEQ ]; then
     NEWFILE=\$(printf "%s-%014d" $KEY_VERSION_PROPOSAL_SEQ \$ACCEPTED_SEQ)
+
     mv \$OLDFILE \$NEWFILE
 
     echo BEGIN-\$NEWFILE-\$(cat \$NEWFILE)-END
 fi
 
-BASHSCRIPT
-}
+# PAXOS - Accept Phase
+if [ $2 ] && [ $PROPOSAL_SEQ -ge \$PROMISED_SEQ ]; then
+    NEWFILE=\$(printf "%s-%014d" $KEY_VERSION_PROPOSAL_SEQ $PROPOSAL_SEQ)
 
+    echo -n $2 > .tmp && mv .tmp \$NEWFILE
 
-function paxos_accept {
-cat << BASHSCRIPT | ssh $1 /usr/bin/bash -e
-
-if [ ! $2 ]; then
-    echo \$USER@\$HOSTNAME empty value not allowed
-    exit 1
+    echo \$USER@\$HOSTNAME accepted \$NEWFILE
 fi
 
-mkdir -p $PAXOS_DIR && cd $PAXOS_DIR
-touch .lockfile && exec 9>.lockfile && flock -x -n 9
-
-touch $DEFAULT_FILE
-OLDFILE=\$(ls | grep -E "^$KEY_VERSION" | sort | tail -n 1)
-PROMISED_SEQ=\$(echo \$OLDFILE | cut -d- -f3)
-
-if [ $PROPOSAL_SEQ -ge \$PROMISED_SEQ ]; then
-    NEWFILE=\$(printf "%s-%014d" $KEY_VERSION_PROPOSAL_SEQ $PROPOSAL_SEQ)
-    echo -n $2 > tmp.\$NEWFILE.tmp
-    mv tmp.\$NEWFILE.tmp \$NEWFILE
-
+if [ -s \$(ls -r | grep -E "^$KEY-" | head -n 1) ]; then
     rm \$(ls -r | grep -E "^$KEY-" | tail -n +2)
-
-    echo \$USER@\$HOSTNAME accepted \$NEWFILE \$(cat \$NEWFILE | wc -c)
 fi
 
 BASHSCRIPT
@@ -81,7 +68,7 @@ if [ $# -gt 2 ]; then
     TMPFILE=$(mktemp -p /var/tmp)
 
     for NODE in $NODES; do
-        paxos_promise $NODE | grep -E "^BEGIN-.+-.+-.+-.+-.*-END$"
+        paxos_server $NODE | grep -E "^BEGIN-.+-.+-.+-.+-.*-END$"
     done | grep $KEY_VERSION | sort > $TMPFILE
 
     if [ ! -s $TMPFILE ] || [ $QUORUM -gt $(cat $TMPFILE | wc -l) ]; then
@@ -101,13 +88,13 @@ if [ $# -gt 2 ]; then
     fi
 
     for NODE in $NODES; do
-        paxos_accept $NODE $VALUE
+        paxos_server $NODE $VALUE
     done
 else
     TMPFILE=$(mktemp -p /var/tmp)
 
     for NODE in $NODES; do
-        fetch $NODE | grep $KEY | grep -E "^BEGIN-.+-.+-.+-.+-.+-END$"
+        read_server $NODE | grep $KEY | grep -E "^BEGIN-.+-.+-.+-.+-.+-END$"
     done | sort > $TMPFILE
 
     if [ ! -s $TMPFILE ]; then
