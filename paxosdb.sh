@@ -8,31 +8,28 @@ QUORUM=$(($(echo $NODES | wc -w) / 2 + 1))
 KEY_VERSION=$(printf "%s-%014d" $KEY $VERSION)
 PROPOSAL_SEQ=$(date +%Y%m%d%H%M%S)
 
+PAXOS_DIR=paxosdb/$(echo $KEY | md5sum | cut -c -3)
 DEFAULT_FILE=$(printf "%s-%014d-%014d" $KEY_VERSION 0 0)
 KEY_VERSION_PROPOSAL_SEQ=$(printf "%s-%014d" $KEY_VERSION $PROPOSAL_SEQ)
 
-
 function fetch {
-cat << BASHSCRIPT | ssh $1 /usr/bin/bash
-set -e
+cat << BASHSCRIPT | ssh $1 /usr/bin/bash -e
 
-mkdir -p paxosdb && cd paxosdb
+cd $PAXOS_DIR
+
 FILE=\$(ls | grep -E "^$KEY" | grep -v '\-00000000000000\-' | sort | tail -n 1)
 
-echo -n BEGIN-\$FILE-
-cat \$FILE
-echo '-END'
+echo BEGIN-\$FILE-\$(cat \$FILE)-END
 
 BASHSCRIPT
 }
 
 
 function paxos_promise {
-cat << BASHSCRIPT | ssh $1 /usr/bin/bash
-set -e
+cat << BASHSCRIPT | ssh $1 /usr/bin/bash -e
 
-mkdir -p paxosdb && cd paxosdb && touch .lockfile
-exec 9>.lockfile && flock -x -n 9
+mkdir -p $PAXOS_DIR && cd $PAXOS_DIR
+touch .lockfile && exec 9>.lockfile && flock -x -n 9
 
 touch $DEFAULT_FILE
 OLDFILE=\$(ls | grep -E "^$KEY_VERSION" | sort | tail -n 1)
@@ -43,25 +40,23 @@ if [ $PROPOSAL_SEQ -gt \$PROMISED_SEQ ]; then
     NEWFILE=\$(printf "%s-%014d" $KEY_VERSION_PROPOSAL_SEQ \$ACCEPTED_SEQ)
     mv \$OLDFILE \$NEWFILE
 
-    echo -n BEGIN-\$NEWFILE-
-    cat \$NEWFILE
-    echo '-END'
+    echo BEGIN-\$NEWFILE-\$(cat \$NEWFILE)-END
 fi
+
 BASHSCRIPT
 }
 
 
 function paxos_accept {
-cat << BASHSCRIPT | ssh $1 /usr/bin/bash
-set -e
+cat << BASHSCRIPT | ssh $1 /usr/bin/bash -e
 
 if [ ! $2 ]; then
     echo \$USER@\$HOSTNAME empty value not allowed
     exit 1
 fi
 
-mkdir -p paxosdb && cd paxosdb && touch .lockfile
-exec 9>.lockfile && flock -x -n 9
+mkdir -p $PAXOS_DIR && cd $PAXOS_DIR
+touch .lockfile && exec 9>.lockfile && flock -x -n 9
 
 touch $DEFAULT_FILE
 OLDFILE=\$(ls | grep -E "^$KEY_VERSION" | sort | tail -n 1)
@@ -76,6 +71,7 @@ if [ $PROPOSAL_SEQ -ge \$PROMISED_SEQ ]; then
 
     echo \$USER@\$HOSTNAME accepted \$NEWFILE \$(cat \$NEWFILE | wc -c)
 fi
+
 BASHSCRIPT
 }
 
