@@ -112,6 +112,6 @@ else
         exit 2
     fi
 
-    echo version=$(($(echo $KEY_VERSION | cut -d- -f2)*1))
+    echo version=$((10#$(echo $KEY_VERSION | cut -d- -f2)))
     echo $VALUE | cut -d' ' -f2 | base64 -d
 fi
