@@ -8,7 +8,7 @@ QUORUM=$(($(echo $NODES | wc -w) / 2 + 1))
 KEY_VERSION=$(printf "%s-%014d" $KEY $VERSION)
 PROPOSAL_SEQ=$(date +%Y%m%d%H%M%S)
 
-PAXOS_DIR=paxosdb/$(echo $KEY | md5sum | cut -c -3)
+PAXOS_DIR=PaxosDB/$(echo $KEY | md5sum | cut -c -3)
 KEY_VERSION_PROPOSAL_SEQ=$(printf "%s-%014d" $KEY_VERSION $PROPOSAL_SEQ)
 
 function read_server {
