@@ -57,14 +57,15 @@ SQL
 
 NODE_COUNT=$(echo $PAXOSDB_CLUSTER | wc -w)
 QUORUM=$(($NODE_COUNT / 2 + 1))
-1>&2 echo "quorum($QUORUM) nodes($NODE_COUNT)"
 
 if [ $# -eq 2 ]; then
     VALUE=$(base64 -w 0 -)
     SESSION_UUID=$(uuid -v 4)
     PROPOSAL_SEQ=$(date +%s)
+    MD5=$(echo $VALUE | md5sum | cut -d' ' -f1)
 
-    1>&2 echo "proposal_seq($PROPOSAL_SEQ) session_uuid($SESSION_UUID)"
+    1>&2 echo "quorum($QUORUM) nodes($NODE_COUNT) value($MD5)"
+    1>&2 echo "proposal($PROPOSAL_SEQ) session($SESSION_UUID)"
 
     seq=0
     count=0
@@ -73,8 +74,10 @@ if [ $# -eq 2 ]; then
         promised_seq=$(echo $result | cut -d'|' -f1)
         accepted_seq=$(echo $result | cut -d'|' -f2)
         session_uuid=$(echo $result | cut -d'|' -f3)
+        accepted_value=$(echo $result | cut -d'|' -f4)
+        md5=$(echo $accepted_value | base64 -d | md5sum | cut -d' ' -f1)
 
-	1>&2 echo "promise($NODE) accepted_seq($accepted_seq)"
+	1>&2 echo "promise($NODE) accepted_seq($accepted_seq) value($md5)"
         if [ $promised_seq -eq $PROPOSAL_SEQ ]; then
             if [ "$session_uuid" = $SESSION_UUID ]; then
                 count=$((count+1))
@@ -87,7 +90,8 @@ if [ $# -eq 2 ]; then
     done
 
     if [ $count -ge $QUORUM ]; then
-	1>&2 echo "accepted_seq($SEQ) accepted_value($VALUE)"
+        MD5=$(echo $VALUE | md5sum | cut -d' ' -f1)
+	1>&2 echo "accepted_seq($seq) accepted_value($MD5)"
 
         for NODE in $PAXOSDB_CLUSTER; do
             accept $NODE $KEY $VERSION $PROPOSAL_SEQ $SESSION_UUID $VALUE
