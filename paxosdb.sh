@@ -2,11 +2,11 @@
 
 KEY=$(echo $1 | base64 -w 0)
 VERSION=$2
-QUORUM=$(($(echo $PAXOS_CLUSTER | wc -w) / 2 + 1))
+QUORUM=$(($(echo $PAXOSDB_CLUSTER | wc -w) / 2 + 1))
 
 
 function promise {
-cat << SQL | ssh $1 sqlite3 ./$PAXOS_DB
+cat << SQL | ssh $1 sqlite3 paxosdb.sqlite3
 create table if not exists paxos(
     key          text,
     version      integer,
@@ -29,7 +29,7 @@ SQL
 }
 
 function accept {
-cat << SQL | ssh $1 sqlite3 ./$PAXOS_DB
+cat << SQL | ssh $1 sqlite3 paxosdb.sqlite3
 
 update paxos
 set promised_seq=$4, accepted_seq=$4, value='$5'
@@ -42,7 +42,7 @@ SQL
 }
 
 function fetch {
-cat << SQL | ssh $1 sqlite3 ./$PAXOS_DB
+cat << SQL | ssh $1 sqlite3 paxosdb.sqlite3
 
 select version, accepted_seq, value
 from paxos
@@ -53,7 +53,7 @@ limit 1
 SQL
 }
 
-1>&2 echo "db($PAXOS_DB) quorum($QUORUM)"
+1>&2 echo "quorum($QUORUM)"
 for NODE in $PAXOS_CLUSTER; do
     1>&2 echo "nodes($NODE)"
 done
@@ -65,7 +65,7 @@ if [ $# -eq 2 ]; then
     ACCEPTED_SEQ=0
     ACCEPTED_VALUE=$(base64 -w 0 -)
 
-    for NODE in $PAXOS_CLUSTER; do
+    for NODE in $PAXOSDB_CLUSTER; do
         result=$(promise $NODE $KEY $VERSION $PROPOSAL_SEQ)
         if [ $(echo $result | cut -d'|' -f1) -gt $ACCEPTED_SEQ ]; then
             ACCEPTED_VALUE=$(echo $result | cut -d'|' -f2)
@@ -74,15 +74,15 @@ if [ $# -eq 2 ]; then
 
     echo "proposing for accepted_seq($ACCEPTED_SEQ) value($ACCEPTED_VALUE)"
 
-    for NODE in $PAXOS_CLUSTER; do
+    for NODE in $PAXOSDB_CLUSTER; do
         accept $NODE $KEY $VERSION $PROPOSAL_SEQ $ACCEPTED_VALUE
     done
 elif [ $# -eq 1 ]; then
-    RESULT=$(for NODE in $PAXOS_CLUSTER; do
+    RESULT=$(for NODE in $PAXOSDB_CLUSTER; do
                  fetch $NODE $KEY
              done | sort | uniq -c)
 
-    if [ $RESULT ] && [ $(echo $RESULT | wc -l) -eq 1 ]; then
+    if [ $(echo $RESULT | wc -l) -eq 1 ]; then
         if [ $(echo $RESULT | cut -d' ' -f1) -ge $QUORUM ]; then
             ROW=$(echo $RESULT | cut -d' ' -f2)
             VERSION=$(echo $ROW | cut -d'|' -f1)
