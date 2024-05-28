@@ -1,4 +1,4 @@
-#!/bin/bash -e
+#!/bin/bash
 
 KEY=$(echo $1 | base64 -w 0)
 VERSION=$2
@@ -50,9 +50,9 @@ SQL
 function fetch {
 cat << SQL | ssh $1 sqlite3 paxosdb.sqlite3
 
-select key, version, value, key
+select 'prefix', version, value, 'suffix'
 from paxos
-where key='$2' and accepted_seq is not null
+where key='$2' and accepted_seq > 0 and value is not null
 order by version desc
 limit 1
 
@@ -107,18 +107,41 @@ function write {
 if [ $# -eq 2 ]; then
     write $KEY $VERSION $(base64 -w 0 -)
 elif [ $# -eq 1 ]; then
-    RESULT=$(for NODE in $PAXOSDB_CLUSTER; do
-                 fetch $NODE $KEY
-             done | sort | uniq -c)
+    for s in $(seq 5); do
+        count=0
+        value=''
+        version=0
+        for NODE in $PAXOSDB_CLUSTER; do
+            result=$(fetch $NODE $KEY)
+	    prefix=$(echo $result | cut -d'|' -f1)
+	    suffix=$(echo $result | cut -d'|' -f4)
 
-    if [ $(echo $RESULT | wc -l) -eq 1 ]; then
-        if [ $(echo $RESULT | cut -d' ' -f1) -ge $QUORUM ]; then
-            ROW=$(echo $RESULT | cut -d' ' -f2)
+            if [ "$prefix" = 'prefix' ] && [ "$suffix" = 'suffix' ]; then
+	        ver=$(echo $result | cut -d'|' -f2)
+	        val=$(echo $result | cut -d'|' -f3)
 
-            echo $ROW | cut -d'|' -f2
-            echo $ROW | cut -d'|' -f3 | base64 -d
+                if [ $ver -gt $version ]; then
+                    count=$((count+1))
+	            value=$val
+                    version=$ver
+                elif [ $ver -eq $version ]; then
+                    if [ $val = $value ]; then
+                        count=$((count+1))
+                    else
+                        count=0
+                        value=''
+                    fi
+                fi
+            fi
+        done
+
+        if [ $count -ge $QUORUM ]; then
+            echo $version
+            echo $value | base64 -d
             exit 0
         fi
-    fi
+
+        write $KEY $version $val
+    done
     exit 1
 fi
