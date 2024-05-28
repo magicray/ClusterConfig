@@ -121,7 +121,7 @@ elif [ $# -eq 1 ]; then
 	        val=$(echo $result | cut -d'|' -f3)
 
                 if [ $ver -gt $version ]; then
-                    count=$((count+1))
+                    count=1
 	            value=$val
                     version=$ver
                 elif [ $ver -eq $version ]; then
