@@ -42,7 +42,7 @@ delete from paxos
 where key='$2' and version < (
     select max(version)
     from paxos
-    where accepted_seq is not null);
+    where accepted_seq > 0 and value is not null);
 
 SQL
 }
@@ -59,14 +59,14 @@ limit 1
 SQL
 }
 
-function write {
+function paxosdb_put {
     local KEY=$1
     local VERSION=$2
     local VALUE=$3
 
+    local MD5=$(echo -n $VALUE | md5sum | cut -d' ' -f1)
     local SESSION_UUID=$(uuid -v 4)
     local PROPOSAL_SEQ=$(date +%s)
-    local MD5=$(echo $VALUE | base64 -d | md5sum | cut -d' ' -f1)
 
     1>&2 echo "quorum($QUORUM) nodes($NODE_COUNT) value($MD5)"
     1>&2 echo "proposal($PROPOSAL_SEQ) session($SESSION_UUID)"
@@ -81,9 +81,9 @@ function write {
         if [ $prefix = $SESSION_UUID ] && [ $suffix = $SESSION_UUID ]; then
             count=$((count+1))
             local accepted_seq=$(echo $result | cut -d'|' -f2)
-            local accepted_value=$(echo $result | cut -d'|' -f3)
+            local accepted_value=$(echo $result | cut -d'|' -f3 | base64 -d)
 
-            MD5=$(echo $accepted_value | base64 -d | md5sum | cut -d' ' -f1)
+            MD5=$(echo -n $accepted_value | md5sum | cut -d' ' -f1)
 	    1>&2 echo "promise($NODE) accepted_seq($accepted_seq) value($MD5)"
 
             if [ $accepted_seq -gt $seq ]; then
@@ -93,10 +93,11 @@ function write {
         fi
     done
 
-    if [ $count -ge $QUORUM ]; then
-        local MD5=$(echo $accepted_value | base64 -d | md5sum | cut -d' ' -f1)
+    if [ $count -ge $QUORUM ] && [ ! -z "$VALUE" ]; then
+        local MD5=$(echo -n $accepted_value | md5sum | cut -d' ' -f1)
 	1>&2 echo "accepted_seq($seq) accepted_value($MD5)"
 
+        VALUE=$(echo -n $VALUE | base64 -w 0)
         for NODE in $PAXOSDB_CLUSTER; do
             accept $NODE $KEY $VERSION $PROPOSAL_SEQ $SESSION_UUID $VALUE
 	    1>&2 echo "accept($NODE)"
@@ -104,21 +105,21 @@ function write {
     fi
 }
 
-if [ $# -eq 2 ]; then
-    write $KEY $VERSION $(base64 -w 0 -)
-elif [ $# -eq 1 ]; then
+function paxosdb_get {
+    KEY=$1
+
     for s in $(seq 5); do
-        count=0
-        value=''
-        version=0
+        local count=0
+        local value=''
+        local version=0
         for NODE in $PAXOSDB_CLUSTER; do
-            result=$(fetch $NODE $KEY)
-	    prefix=$(echo $result | cut -d'|' -f1)
-	    suffix=$(echo $result | cut -d'|' -f4)
+            local result=$(fetch $NODE $KEY)
+	    local prefix=$(echo $result | cut -d'|' -f1)
+	    local suffix=$(echo $result | cut -d'|' -f4)
 
             if [ "$prefix" = 'prefix' ] && [ "$suffix" = 'suffix' ]; then
-	        ver=$(echo $result | cut -d'|' -f2)
-	        val=$(echo $result | cut -d'|' -f3)
+	        local ver=$(echo $result | cut -d'|' -f2)
+	        local val=$(echo $result | cut -d'|' -f3)
 
                 if [ $ver -gt $version ]; then
                     count=1
@@ -141,7 +142,14 @@ elif [ $# -eq 1 ]; then
             exit 0
         fi
 
-        write $KEY $version $val
+        write $KEY $version
     done
     exit 1
+}
+
+if [ $# -eq 2 ]; then
+    paxosdb_put $KEY $VERSION $(cat -)
+    paxosdb_get $KEY
+elif [ $# -eq 1 ]; then
+    paxosdb_get $KEY
 fi
